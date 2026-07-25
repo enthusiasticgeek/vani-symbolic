@@ -1,0 +1,78 @@
+// Tests for sym_eval / _sym_ipow: each op in isolation, a deeply nested
+// multi-variable case, a shared-subexpression-reuse case (unique to the
+// arena design -- one physical node evaluated through two different
+// parent paths), and Pow at several exponents.
+// Run with:  vanic test tests/test_eval.vani
+
+use "../src/lib.vani";
+
+fn main() -> i64 {
+    let novars: Vec<i64> = vec();
+
+    // Each op in isolation: 6 op 3.
+    let arena: Vec<ExprNode> = sym_arena_new();
+    let six: i64 = sym_num(mut ref arena, 6);
+    let three: i64 = sym_num(mut ref arena, 3);
+
+    let add_idx: i64 = sym_add(mut ref arena, six, three);
+    assert sym_eval(ref arena, add_idx, ref novars) == 9;
+
+    let sub_idx: i64 = sym_sub(mut ref arena, six, three);
+    assert sym_eval(ref arena, sub_idx, ref novars) == 3;
+
+    let mul_idx: i64 = sym_mul(mut ref arena, six, three);
+    assert sym_eval(ref arena, mul_idx, ref novars) == 18;
+
+    let div_idx: i64 = sym_div(mut ref arena, six, three);
+    assert sym_eval(ref arena, div_idx, ref novars) == 2;
+
+    let neg_idx: i64 = sym_neg(mut ref arena, six);
+    assert sym_eval(ref arena, neg_idx, ref novars) == (0 - 6);
+
+    // Pow at exponents 0, 1, and 5 (2^10 = 1024, exercises _sym_ipow's
+    // squaring loop across multiple bit positions, not just a 1-bit case).
+    let two: i64 = sym_num(mut ref arena, 2);
+    let zero: i64 = sym_num(mut ref arena, 0);
+    let one: i64 = sym_num(mut ref arena, 1);
+    let ten: i64 = sym_num(mut ref arena, 10);
+    assert sym_eval(ref arena, sym_pow(mut ref arena, two, zero), ref novars) == 1;
+    assert sym_eval(ref arena, sym_pow(mut ref arena, two, one), ref novars) == 2;
+    assert sym_eval(ref arena, sym_pow(mut ref arena, two, ten), ref novars) == 1024;
+
+    // Deeply nested, multi-variable: ((x+y)*(x-y) - z^2)/2 at x=5,y=3,z=2
+    // -> ((8)*(2) - 4)/2 = (16-4)/2 = 6.
+    let arena2: Vec<ExprNode> = sym_arena_new();
+    let table2: SymbolTable = symtab_new();
+    let x1: i64 = sym_var(mut ref arena2, mut ref table2, "x");
+    let y1: i64 = sym_var(mut ref arena2, mut ref table2, "y");
+    let x2: i64 = sym_var(mut ref arena2, mut ref table2, "x");
+    let y2: i64 = sym_var(mut ref arena2, mut ref table2, "y");
+    let z1: i64 = sym_var(mut ref arena2, mut ref table2, "z");
+    let two_b: i64 = sym_num(mut ref arena2, 2);
+    let two_c: i64 = sym_num(mut ref arena2, 2);
+
+    let x_plus_y: i64 = sym_add(mut ref arena2, x1, y1);
+    let x_minus_y: i64 = sym_sub(mut ref arena2, x2, y2);
+    let product: i64 = sym_mul(mut ref arena2, x_plus_y, x_minus_y);
+    let z_sq: i64 = sym_pow(mut ref arena2, z1, two_b);
+    let numerator: i64 = sym_sub(mut ref arena2, product, z_sq);
+    let whole: i64 = sym_div(mut ref arena2, numerator, two_c);
+
+    let vals: Vec<i64> = vec(5, 3, 2); // var_id 0=x, 1=y, 2=z (first-seen order)
+    assert sym_eval(ref arena2, whole, ref vals) == 6;
+
+    // Shared-subexpression reuse: build `x` once, reuse its returned node
+    // index three times inside a larger expression -- (x + x) * x at x=4
+    // -> (4+4)*4 = 32. Unique to the flat-arena design: one physical Var
+    // node is evaluated through three different parent-edge traversals.
+    let arena3: Vec<ExprNode> = sym_arena_new();
+    let table3: SymbolTable = symtab_new();
+    let shared_x: i64 = sym_var(mut ref arena3, mut ref table3, "x");
+    let x_plus_x: i64 = sym_add(mut ref arena3, shared_x, shared_x);
+    let result_idx: i64 = sym_mul(mut ref arena3, x_plus_x, shared_x);
+    let vals3: Vec<i64> = vec(4);
+    assert sym_eval(ref arena3, result_idx, ref vals3) == 32;
+
+    print "eval ok";
+    return 0;
+}

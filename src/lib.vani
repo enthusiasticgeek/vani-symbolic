@@ -252,3 +252,65 @@ fn sym_eq_structural(arena: ref Vec<ExprNode>, a: i64, b: i64) -> bool {
     }
     return sym_eq_structural(arena, na.right, nb.right);
 }
+
+// ── Evaluation ───────────────────────────────────────────────────────────
+
+// `var_values` is indexed directly by var_id (see the header comment) --
+// no symbol table needed here, no string comparison anywhere in this
+// function or anything it calls.
+// NO #[wcet]: recursion depth is the tree depth, a runtime value.
+// WCET formula: ~20 * (number of nodes in the subtree rooted at `root`),
+// plus _sym_ipow's own formula for any Pow node encountered.
+fn sym_eval(arena: ref Vec<ExprNode>, root: i64, var_values: ref Vec<i64>) -> i64 {
+    let node: ExprNode = arena[root];
+    if node.kind == 0 {
+        return node.value;
+    }
+    if node.kind == 1 {
+        assert node.value >= 0;
+        assert node.value < (len(var_values) as i64);
+        return var_values[node.value];
+    }
+    if node.kind == 7 {
+        return 0 - sym_eval(arena, node.left, var_values);
+    }
+    let lv: i64 = sym_eval(arena, node.left, var_values);
+    let rv: i64 = sym_eval(arena, node.right, var_values);
+    if node.kind == 2 {
+        return lv + rv;
+    }
+    if node.kind == 3 {
+        return lv - rv;
+    }
+    if node.kind == 4 {
+        return lv * rv;
+    }
+    if node.kind == 5 {
+        return lv / rv;
+    }
+    // kind == 6: Pow. v0.1.0 supports nonnegative integer exponents only
+    // -- no rationals/floats in this tier yet -- traps otherwise,
+    // matching this ecosystem's "assert on out-of-scope input"
+    // convention (e.g. vani-bignum's bn_div_mod asserting a nonzero
+    // divisor rather than silently misbehaving).
+    assert rv >= 0;
+    return _sym_ipow(lv, rv);
+}
+
+// Exponentiation by squaring, O(log exp) -- the same technique
+// vani-bignum's TODO.md names for its own future bn_pow_i64.
+// NO #[wcet]: loop bound is log2(exp), a runtime value.
+// WCET formula: ~10 * log2(exponent + 1).
+fn _sym_ipow(base: i64, exponent: i64) -> i64 {
+    let result: i64 = 1;
+    let b: i64 = base;
+    let e: i64 = exponent;
+    while e > 0 {
+        if e - (e / 2) * 2 == 1 {
+            result = result * b;
+        }
+        b = b * b;
+        e = e / 2;
+    }
+    return result;
+}
