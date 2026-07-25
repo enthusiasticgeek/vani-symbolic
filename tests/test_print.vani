@@ -1,0 +1,91 @@
+// Tests for sym_to_str: every op printed alone, the full precedence/
+// associativity matrix (this file IS the spec for spacing/paren rules,
+// since no external "correct answer" exists for this new pattern), and
+// a deeply nested case checked character-for-character.
+// Run with:  vanic test tests/test_print.vani
+
+use "../src/lib.vani";
+
+fn main() -> i64 {
+    let arena: Vec<ExprNode> = sym_arena_new();
+    let table: SymbolTable = symtab_new();
+    let one: i64 = sym_num(mut ref arena, 1);
+    let two: i64 = sym_num(mut ref arena, 2);
+    let three: i64 = sym_num(mut ref arena, 3);
+    let x: i64 = sym_var(mut ref arena, mut ref table, "x");
+    let y: i64 = sym_var(mut ref arena, mut ref table, "y");
+
+    // Every op printed alone.
+    assert sym_to_str(ref arena, ref table, sym_add(mut ref arena, one, two)) == "1 + 2";
+    assert sym_to_str(ref arena, ref table, sym_sub(mut ref arena, one, two)) == "1 - 2";
+    assert sym_to_str(ref arena, ref table, sym_mul(mut ref arena, one, two)) == "1*2";
+    assert sym_to_str(ref arena, ref table, sym_div(mut ref arena, one, two)) == "1/2";
+    assert sym_to_str(ref arena, ref table, sym_pow(mut ref arena, one, two)) == "1^2";
+    assert sym_to_str(ref arena, ref table, sym_neg(mut ref arena, one)) == "-1";
+
+    // Precedence: (1+2)*3 needs parens; 1+2*3 doesn't.
+    let add12: i64 = sym_add(mut ref arena, one, two);
+    let mul_add_3: i64 = sym_mul(mut ref arena, add12, three);
+    assert sym_to_str(ref arena, ref table, mul_add_3) == "(1 + 2)*3";
+
+    let mul23: i64 = sym_mul(mut ref arena, two, three);
+    let add_1_mul: i64 = sym_add(mut ref arena, one, mul23);
+    assert sym_to_str(ref arena, ref table, add_1_mul) == "1 + 2*3";
+
+    // Sub is left-associative: (1-2)-3 prints without inner parens;
+    // 1-(2-3) needs them (right child at equal precedence).
+    let sub12: i64 = sym_sub(mut ref arena, one, two);
+    let sub_sub_3: i64 = sym_sub(mut ref arena, sub12, three);
+    assert sym_to_str(ref arena, ref table, sub_sub_3) == "1 - 2 - 3";
+
+    let sub23: i64 = sym_sub(mut ref arena, two, three);
+    let sub_1_sub: i64 = sym_sub(mut ref arena, one, sub23);
+    assert sym_to_str(ref arena, ref table, sub_1_sub) == "1 - (2 - 3)";
+
+    // Pow is right-associative: 2^(3^2) prints without inner parens;
+    // (2^3)^2 needs them (left child at equal precedence).
+    let pow32: i64 = sym_pow(mut ref arena, three, two);
+    let pow_2_pow: i64 = sym_pow(mut ref arena, two, pow32);
+    assert sym_to_str(ref arena, ref table, pow_2_pow) == "2^3^2";
+
+    let pow23: i64 = sym_pow(mut ref arena, two, three);
+    let pow_pow_2: i64 = sym_pow(mut ref arena, pow23, two);
+    assert sym_to_str(ref arena, ref table, pow_pow_2) == "(2^3)^2";
+
+    // Neg(Neg(x)) is always parenthesized to avoid "--x".
+    let neg_x: i64 = sym_neg(mut ref arena, x);
+    let neg_neg_x: i64 = sym_neg(mut ref arena, neg_x);
+    assert sym_to_str(ref arena, ref table, neg_neg_x) == "-(-x)";
+
+    // Neg(Add(x,y)) needs parens (Neg binds tighter than Add);
+    // Add(x, Neg(y)) does not (Neg is on the right, own atom already).
+    let x_plus_y: i64 = sym_add(mut ref arena, x, y);
+    let neg_sum: i64 = sym_neg(mut ref arena, x_plus_y);
+    assert sym_to_str(ref arena, ref table, neg_sum) == "-(x + y)";
+
+    let neg_y: i64 = sym_neg(mut ref arena, y);
+    let x_plus_neg_y: i64 = sym_add(mut ref arena, x, neg_y);
+    assert sym_to_str(ref arena, ref table, x_plus_neg_y) == "x + -y";
+
+    // Deeply nested, checked character-for-character:
+    // (x+1)^2 - 2*(x-3)
+    let arena2: Vec<ExprNode> = sym_arena_new();
+    let table2: SymbolTable = symtab_new();
+    let dx1: i64 = sym_var(mut ref arena2, mut ref table2, "x");
+    let d1: i64 = sym_num(mut ref arena2, 1);
+    let d2exp: i64 = sym_num(mut ref arena2, 2);
+    let d2coef: i64 = sym_num(mut ref arena2, 2);
+    let dx2: i64 = sym_var(mut ref arena2, mut ref table2, "x");
+    let d3: i64 = sym_num(mut ref arena2, 3);
+
+    let x_plus_1: i64 = sym_add(mut ref arena2, dx1, d1);
+    let squared: i64 = sym_pow(mut ref arena2, x_plus_1, d2exp);
+    let x_minus_3: i64 = sym_sub(mut ref arena2, dx2, d3);
+    let two_times: i64 = sym_mul(mut ref arena2, d2coef, x_minus_3);
+    let whole: i64 = sym_sub(mut ref arena2, squared, two_times);
+
+    assert sym_to_str(ref arena2, ref table2, whole) == "(x + 1)^2 - 2*(x - 3)";
+
+    print "print ok";
+    return 0;
+}

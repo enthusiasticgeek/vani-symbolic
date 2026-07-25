@@ -314,3 +314,94 @@ fn _sym_ipow(base: i64, exponent: i64) -> i64 {
     }
     return result;
 }
+
+// ── Pretty-printing ──────────────────────────────────────────────────────
+
+// A genuinely new pattern in this ecosystem -- no prior precedence-driven
+// printer exists in any sibling package, so there's no external "correct
+// answer" to check against beyond the precedence table itself (modeled
+// on Python's real operator precedence, not invented): Add/Sub=1,
+// Mul/Div=2, Neg=3, Pow=4, atoms (Num/Var)=5 (never parenthesized).
+// Add/Mul are fully associative for printing (an equal-precedence child
+// never needs parens on either side); Sub/Div are left-associative
+// (their RIGHT child needs parens at equal precedence); Pow is
+// right-associative (its LEFT child needs parens at equal precedence).
+// A Neg whose immediate child is itself Neg is always parenthesized,
+// purely to avoid printing the visually-confusing `--x`. Spacing:
+// spaces around `+`/`-`, none around `*`/`/`/`^`, matching SymPy's
+// str() convention -- this file is the single source of truth for
+// tests/test_print.vani's expected strings, since no external spec
+// exists for this new pattern.
+fn sym_to_str(arena: ref Vec<ExprNode>, table: ref SymbolTable, root: i64) -> OwnedStr {
+    return _sym_to_str_prec(arena, table, root, 0);
+}
+
+// `min_required`: the minimum precedence this subtree must have to print
+// unparenthesized in its caller's position. 0 at the top level (nothing
+// is ever wrapped there).
+// NO #[wcet]: recursion depth is the tree depth, a runtime value.
+// WCET formula: ~30 * (number of nodes in the subtree rooted at `idx`).
+fn _sym_to_str_prec(arena: ref Vec<ExprNode>, table: ref SymbolTable, idx: i64, min_required: i64) -> OwnedStr {
+    let node: ExprNode = arena[idx];
+    if node.kind == 0 {
+        return i64_to_str(node.value);
+    }
+    if node.kind == 1 {
+        return symtab_name_at(table, node.value);
+    }
+    if node.kind == 7 {
+        let child_min: i64 = 3;
+        if arena[node.left].kind == 7 {
+            child_min = 4; // force parens around a nested Neg, avoids "--x"
+        }
+        let inner: OwnedStr = _sym_to_str_prec(arena, table, node.left, child_min);
+        let s: OwnedStr = "-" + inner;
+        return _sym_wrap_if_needed(s, 3, min_required);
+    }
+    let my_prec: i64 = _sym_prec(node.kind);
+    let left_min: i64 = my_prec;
+    let right_min: i64 = my_prec;
+    if node.kind == 3 || node.kind == 5 {
+        right_min = my_prec + 1; // Sub, Div: left-associative
+    }
+    if node.kind == 6 {
+        left_min = my_prec + 1; // Pow: right-associative
+    }
+    let ls: OwnedStr = _sym_to_str_prec(arena, table, node.left, left_min);
+    let rs: OwnedStr = _sym_to_str_prec(arena, table, node.right, right_min);
+    let combined: OwnedStr = ls + _sym_op_str(node.kind) + rs;
+    return _sym_wrap_if_needed(combined, my_prec, min_required);
+}
+
+fn _sym_prec(kind: i64) -> i64 {
+    if kind == 2 || kind == 3 {
+        return 1; // Add, Sub
+    }
+    if kind == 4 || kind == 5 {
+        return 2; // Mul, Div
+    }
+    return 4; // Pow (kind == 6)
+}
+
+fn _sym_op_str(kind: i64) -> OwnedStr {
+    if kind == 2 {
+        return " + " + "";
+    }
+    if kind == 3 {
+        return " - " + "";
+    }
+    if kind == 4 {
+        return "*" + "";
+    }
+    if kind == 5 {
+        return "/" + "";
+    }
+    return "^" + ""; // Pow
+}
+
+fn _sym_wrap_if_needed(s: OwnedStr, my_prec: i64, min_required: i64) -> OwnedStr {
+    if my_prec < min_required {
+        return "(" + s + ")";
+    }
+    return s;
+}
