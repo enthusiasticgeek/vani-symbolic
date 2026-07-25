@@ -1,0 +1,73 @@
+// A deliberately messy expression mixing foldable constants,
+// identities, and collectible like terms in one tree:
+//   (2*x + 3*x) - (1*y) + (0*z) + (5-2) + (x*1)
+// Expected simplification: 2x+3x+x collect to 6x, 1*y (subtracted)
+// collects to -y, 0*z folds away, 5-2 folds to 3 -- net 6x - y + 3,
+// independent of z. Composed construction+simplify+eval+print check,
+// per this package's established build-order discipline.
+// Run with:  vanic run examples/simplify_demo.vani
+
+use "../src/lib.vani";
+
+fn main() -> i64 {
+    let arena: Vec<ExprNode> = sym_arena_new();
+    let table: SymbolTable = symtab_new();
+
+    let x1: i64 = sym_var(mut ref arena, mut ref table, "x");
+    let x2: i64 = sym_var(mut ref arena, mut ref table, "x");
+    let y1: i64 = sym_var(mut ref arena, mut ref table, "y");
+    let z1: i64 = sym_var(mut ref arena, mut ref table, "z");
+    let x3: i64 = sym_var(mut ref arena, mut ref table, "x");
+
+    let two: i64 = sym_num(mut ref arena, 2);
+    let three: i64 = sym_num(mut ref arena, 3);
+    let one_a: i64 = sym_num(mut ref arena, 1);
+    let zero: i64 = sym_num(mut ref arena, 0);
+    let five: i64 = sym_num(mut ref arena, 5);
+    let two_b: i64 = sym_num(mut ref arena, 2);
+    let one_b: i64 = sym_num(mut ref arena, 1);
+
+    let term1: i64 = sym_mul(mut ref arena, two, x1);      // 2*x
+    let term2: i64 = sym_mul(mut ref arena, three, x2);    // 3*x
+    let term3: i64 = sym_mul(mut ref arena, one_a, y1);    // 1*y
+    let term4: i64 = sym_mul(mut ref arena, zero, z1);     // 0*z
+    let term5: i64 = sym_sub(mut ref arena, five, two_b);  // 5-2
+    let term6: i64 = sym_mul(mut ref arena, x3, one_b);    // x*1
+
+    let step1: i64 = sym_add(mut ref arena, term1, term2);
+    let step2: i64 = sym_sub(mut ref arena, step1, term3);
+    let step3: i64 = sym_add(mut ref arena, step2, term4);
+    let step4: i64 = sym_add(mut ref arena, step3, term5);
+    let original: i64 = sym_add(mut ref arena, step4, term6);
+
+    let simplified_arena: Vec<ExprNode> = sym_arena_new();
+    let simplified: i64 = sym_simplify(ref arena, original, mut ref simplified_arena);
+
+    print "before:";
+    print sym_to_str(ref arena, ref table, original);
+    print "after:";
+    print sym_to_str(ref simplified_arena, ref table, simplified);
+
+    // Evaluate at several (x, y, z) points -- z's value must never
+    // matter (0*z term), original and simplified must always agree.
+    // var_id order: x=0, y=1, z=2 (first-seen).
+    let p1: Vec<i64> = vec(1, 1, 999);
+    let p2: Vec<i64> = vec(0, 0, 0 - 500);
+    let p3: Vec<i64> = vec(0 - 4, 7, 42);
+    let p4: Vec<i64> = vec(10, 0 - 3, 0);
+
+    assert sym_eval(ref arena, original, ref p1) == sym_eval(ref simplified_arena, simplified, ref p1);
+    assert sym_eval(ref arena, original, ref p2) == sym_eval(ref simplified_arena, simplified, ref p2);
+    assert sym_eval(ref arena, original, ref p3) == sym_eval(ref simplified_arena, simplified, ref p3);
+    assert sym_eval(ref arena, original, ref p4) == sym_eval(ref simplified_arena, simplified, ref p4);
+
+    // Exact hand-computed check at x=10, y=-3 (z irrelevant):
+    // 6*10 - (-3) + 3 = 60 + 3 + 3 = 66.
+    assert sym_eval(ref arena, original, ref p4) == 66;
+    assert sym_eval(ref simplified_arena, simplified, ref p4) == 66;
+
+    print "eval at (10, -3, 0):";
+    print i64_to_str(sym_eval(ref simplified_arena, simplified, ref p4));
+
+    return 0;
+}
