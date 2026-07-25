@@ -105,15 +105,21 @@ struct SymbolTable {
 
 // ── Construction ─────────────────────────────────────────────────────────
 
+#[bounded_stack(bytes = 56)]
+#[wcet(cycles = 85)]
 fn sym_arena_new() -> Vec<ExprNode> {
     return vec();
 }
 
+#[bounded_stack(bytes = 88)]
+#[wcet(cycles = 89)]
 fn symtab_new() -> SymbolTable {
     let names: Vec<OwnedStr> = vec();
     return SymbolTable { names: names };
 }
 
+#[bounded_stack(bytes = 56)]
+#[wcet(cycles = 36)]
 fn sym_num(arena: mut ref Vec<ExprNode>, n: i64) -> i64 {
     push(arena, ExprNode { kind: 0, value: n, left: 0 - 1, right: 0 - 1 });
     return (len(arena) as i64) - 1;
@@ -126,6 +132,9 @@ fn sym_num(arena: mut ref Vec<ExprNode>, n: i64) -> i64 {
 // occurrence (e.g. x*x sharing a single x), reuse the returned node
 // index directly instead of calling sym_var again -- see
 // examples/symbolic_demo.vani for both patterns side by side.
+// NO #[wcet]: calls symtab_intern, whose own cost is a runtime-Vec-
+// length-bounded loop.
+#[bounded_stack(bytes = 152)]
 fn sym_var(arena: mut ref Vec<ExprNode>, table: mut ref SymbolTable, name: Str) -> i64 {
     let var_id: i64 = symtab_intern(table, name);
     push(arena, ExprNode { kind: 1, value: var_id, left: 0 - 1, right: 0 - 1 });
@@ -142,6 +151,7 @@ fn sym_var(arena: mut ref Vec<ExprNode>, table: mut ref SymbolTable, name: Str) 
 // NO #[wcet]: loop bound is len(table.names), a runtime value.
 // WCET formula: ~15 + 10 * len(table.names) (one string-compare per
 // existing name, worst case scanning every entry with no match).
+#[bounded_stack(bytes = 80)]
 fn symtab_intern(table: mut ref SymbolTable, name: Str) -> i64 {
     let i: i64 = 0;
     for existing in ref table.names {
@@ -157,6 +167,8 @@ fn symtab_intern(table: mut ref SymbolTable, name: Str) -> i64 {
 // Owned copy of the display name for var_id. Can't just index-and-return
 // (OwnedStr isn't Copy, would alias the Vec's slot) -- clone_at gives an
 // explicit, visible-cost deep copy instead.
+#[bounded_stack(bytes = 56)]
+#[wcet(cycles = 102)]
 fn symtab_name_at(table: ref SymbolTable, var_id: i64) -> OwnedStr {
     assert var_id >= 0;
     assert var_id < (len(ref table.names) as i64);
@@ -173,6 +185,8 @@ fn symtab_name_at(table: ref SymbolTable, var_id: i64) -> OwnedStr {
 // Vec<ExprNode>") -- inlined instead, exactly as anticipated as the
 // fallback for this case.
 
+#[bounded_stack(bytes = 64)]
+#[wcet(cycles = 60)]
 fn sym_add(arena: mut ref Vec<ExprNode>, a: i64, b: i64) -> i64 {
     assert a >= 0 && a < (len(arena) as i64);
     assert b >= 0 && b < (len(arena) as i64);
@@ -180,6 +194,8 @@ fn sym_add(arena: mut ref Vec<ExprNode>, a: i64, b: i64) -> i64 {
     return (len(arena) as i64) - 1;
 }
 
+#[bounded_stack(bytes = 64)]
+#[wcet(cycles = 60)]
 fn sym_sub(arena: mut ref Vec<ExprNode>, a: i64, b: i64) -> i64 {
     assert a >= 0 && a < (len(arena) as i64);
     assert b >= 0 && b < (len(arena) as i64);
@@ -187,6 +203,8 @@ fn sym_sub(arena: mut ref Vec<ExprNode>, a: i64, b: i64) -> i64 {
     return (len(arena) as i64) - 1;
 }
 
+#[bounded_stack(bytes = 64)]
+#[wcet(cycles = 60)]
 fn sym_mul(arena: mut ref Vec<ExprNode>, a: i64, b: i64) -> i64 {
     assert a >= 0 && a < (len(arena) as i64);
     assert b >= 0 && b < (len(arena) as i64);
@@ -194,6 +212,8 @@ fn sym_mul(arena: mut ref Vec<ExprNode>, a: i64, b: i64) -> i64 {
     return (len(arena) as i64) - 1;
 }
 
+#[bounded_stack(bytes = 64)]
+#[wcet(cycles = 60)]
 fn sym_div(arena: mut ref Vec<ExprNode>, a: i64, b: i64) -> i64 {
     assert a >= 0 && a < (len(arena) as i64);
     assert b >= 0 && b < (len(arena) as i64);
@@ -201,6 +221,8 @@ fn sym_div(arena: mut ref Vec<ExprNode>, a: i64, b: i64) -> i64 {
     return (len(arena) as i64) - 1;
 }
 
+#[bounded_stack(bytes = 64)]
+#[wcet(cycles = 60)]
 fn sym_pow(arena: mut ref Vec<ExprNode>, base: i64, exponent: i64) -> i64 {
     assert base >= 0 && base < (len(arena) as i64);
     assert exponent >= 0 && exponent < (len(arena) as i64);
@@ -208,6 +230,8 @@ fn sym_pow(arena: mut ref Vec<ExprNode>, base: i64, exponent: i64) -> i64 {
     return (len(arena) as i64) - 1;
 }
 
+#[bounded_stack(bytes = 56)]
+#[wcet(cycles = 48)]
 fn sym_neg(arena: mut ref Vec<ExprNode>, a: i64) -> i64 {
     assert a >= 0 && a < (len(arena) as i64);
     push(arena, ExprNode { kind: 7, value: 0, left: a, right: 0 - 1 });
@@ -216,10 +240,14 @@ fn sym_neg(arena: mut ref Vec<ExprNode>, a: i64) -> i64 {
 
 // ── Introspection ────────────────────────────────────────────────────────
 
+#[bounded_stack(bytes = 56)]
+#[wcet(cycles = 10)]
 fn sym_kind(arena: ref Vec<ExprNode>, idx: i64) -> i64 {
     return arena[idx].kind;
 }
 
+#[bounded_stack(bytes = 57)]
+#[wcet(cycles = 22)]
 fn sym_is_leaf(arena: ref Vec<ExprNode>, idx: i64) -> bool {
     let k: i64 = arena[idx].kind;
     return k == 0 || k == 1;
@@ -301,6 +329,7 @@ fn sym_eval(arena: ref Vec<ExprNode>, root: i64, var_values: ref Vec<i64>) -> i6
 // vani-bignum's TODO.md names for its own future bn_pow_i64.
 // NO #[wcet]: loop bound is log2(exp), a runtime value.
 // WCET formula: ~10 * log2(exponent + 1).
+#[bounded_stack(bytes = 104)]
 fn _sym_ipow(base: i64, exponent: i64) -> i64 {
     let result: i64 = 1;
     let b: i64 = base;
@@ -373,6 +402,8 @@ fn _sym_to_str_prec(arena: ref Vec<ExprNode>, table: ref SymbolTable, idx: i64, 
     return _sym_wrap_if_needed(combined, my_prec, min_required);
 }
 
+#[bounded_stack(bytes = 64)]
+#[wcet(cycles = 42)]
 fn _sym_prec(kind: i64) -> i64 {
     if kind == 2 || kind == 3 {
         return 1; // Add, Sub
@@ -383,6 +414,8 @@ fn _sym_prec(kind: i64) -> i64 {
     return 4; // Pow (kind == 6)
 }
 
+#[bounded_stack(bytes = 80)]
+#[wcet(cycles = 69)]
 fn _sym_op_str(kind: i64) -> OwnedStr {
     if kind == 2 {
         return " + " + "";
@@ -399,6 +432,8 @@ fn _sym_op_str(kind: i64) -> OwnedStr {
     return "^" + ""; // Pow
 }
 
+#[bounded_stack(bytes = 72)]
+#[wcet(cycles = 24)]
 fn _sym_wrap_if_needed(s: OwnedStr, my_prec: i64, min_required: i64) -> OwnedStr {
     if my_prec < min_required {
         return "(" + s + ")";
