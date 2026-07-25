@@ -1,0 +1,127 @@
+// Tests for sym_simplify's Layer 2: flatten-and-collect for Add/Sub.
+// Scope (see the v0.2.0 plan): only Num/Var/Mul(Num,Var) monomial terms
+// in a flattened top-level Add/Sub chain are collected; anything else
+// (a product of two variables, a Pow, ...) is kept opaque. NOT general
+// polynomial normal form.
+// Run with:  vanic test tests/test_simplify_collect.vani
+
+use "../src/lib.vani";
+
+fn main() -> i64 {
+    seed_rng(999);
+
+    // ---- 2x + 3x -> 5x (the roadmap's own motivating example) ----
+    let a1: Vec<ExprNode> = sym_arena_new();
+    let t1: SymbolTable = symtab_new();
+    let x1: i64 = sym_var(mut ref a1, mut ref t1, "x");
+    let x2: i64 = sym_var(mut ref a1, mut ref t1, "x");
+    let two: i64 = sym_num(mut ref a1, 2);
+    let three: i64 = sym_num(mut ref a1, 3);
+    let two_x: i64 = sym_mul(mut ref a1, two, x1);
+    let three_x: i64 = sym_mul(mut ref a1, three, x2);
+    let e1: i64 = sym_add(mut ref a1, two_x, three_x);
+
+    let d1: Vec<ExprNode> = sym_arena_new();
+    let r1: i64 = sym_simplify(ref a1, e1, mut ref d1);
+    // Expect: Mul(Num(5), Var(x)) -- the arena also holds dead
+    // intermediate nodes from simplifying each term individually before
+    // collection (expected: the arena only ever grows, per v0.1.0's
+    // design note -- not asserting an exact arena length here).
+    assert d1[r1].kind == 4;
+    assert d1[d1[r1].left].kind == 0 && d1[d1[r1].left].value == 5;
+    assert d1[d1[r1].right].kind == 1;
+
+    // ---- x - x -> 0 ----
+    let a2: Vec<ExprNode> = sym_arena_new();
+    let t2: SymbolTable = symtab_new();
+    let xa: i64 = sym_var(mut ref a2, mut ref t2, "x");
+    let xb: i64 = sym_var(mut ref a2, mut ref t2, "x");
+    let e2: i64 = sym_sub(mut ref a2, xa, xb);
+    let d2: Vec<ExprNode> = sym_arena_new();
+    let r2: i64 = sym_simplify(ref a2, e2, mut ref d2);
+    assert d2[r2].kind == 0 && d2[r2].value == 0;
+
+    // ---- Constant folding through Add/Sub: 2+3 -> 5, 2-3 -> -1 ----
+    let a3: Vec<ExprNode> = sym_arena_new();
+    let n2: i64 = sym_num(mut ref a3, 2);
+    let n3: i64 = sym_num(mut ref a3, 3);
+    let d3: Vec<ExprNode> = sym_arena_new();
+    let r3: i64 = sym_simplify(ref a3, sym_add(mut ref a3, n2, n3), mut ref d3);
+    assert d3[r3].kind == 0 && d3[r3].value == 5;
+    let d3b: Vec<ExprNode> = sym_arena_new();
+    let r3b: i64 = sym_simplify(ref a3, sym_sub(mut ref a3, n2, n3), mut ref d3b);
+    assert d3b[r3b].kind == 0 && d3b[r3b].value == (0 - 1);
+
+    // ---- Mixed multi-term: 2*x + y*y + 3 - x + 5 ----
+    // Collects the x terms (2x - x -> x), leaves y*y opaque (not a
+    // Num/Var/monomial shape), combines constants (3+5=8).
+    let a4: Vec<ExprNode> = sym_arena_new();
+    let t4: SymbolTable = symtab_new();
+    let x4a: i64 = sym_var(mut ref a4, mut ref t4, "x");
+    let y4a: i64 = sym_var(mut ref a4, mut ref t4, "y");
+    let y4b: i64 = sym_var(mut ref a4, mut ref t4, "y");
+    let x4b: i64 = sym_var(mut ref a4, mut ref t4, "x");
+    let two4: i64 = sym_num(mut ref a4, 2);
+    let three4: i64 = sym_num(mut ref a4, 3);
+    let five4: i64 = sym_num(mut ref a4, 5);
+
+    let two_x4: i64 = sym_mul(mut ref a4, two4, x4a);
+    let y_sq: i64 = sym_mul(mut ref a4, y4a, y4b); // Var*Var -- opaque, not a monomial
+    let step1: i64 = sym_add(mut ref a4, two_x4, y_sq);
+    let step2: i64 = sym_add(mut ref a4, step1, three4);
+    let step3: i64 = sym_sub(mut ref a4, step2, x4b);
+    let e4: i64 = sym_add(mut ref a4, step3, five4);
+
+    let d4: Vec<ExprNode> = sym_arena_new();
+    let r4: i64 = sym_simplify(ref a4, e4, mut ref d4);
+
+    // Verify by evaluation (property-based): original vs simplified at
+    // several random (x, y) points. var_id 0=x, 1=y (first-seen order).
+    let i: i64 = 0;
+    while i < 8 {
+        let xv: i64 = rand_in_range(0 - 15, 15);
+        let yv: i64 = rand_in_range(0 - 15, 15);
+        let vals: Vec<i64> = vec(xv, yv);
+        assert sym_eval(ref a4, e4, ref vals) == sym_eval(ref d4, r4, ref vals);
+        i = i + 1;
+    }
+    // Exact-value spot check at x=10, y=4: (2*10 + 4*4 + 3 - 10 + 5) =
+    // (20 + 16 + 3 - 10 + 5) = 34.
+    let spot: Vec<i64> = vec(10, 4);
+    assert sym_eval(ref a4, e4, ref spot) == 34;
+    assert sym_eval(ref d4, r4, ref spot) == 34;
+
+    // ---- Property-based: 2x + 3x - x - 4x (should collect to 0*x -> the
+    // constant-only result 0, since ALL var terms cancel and there's no
+    // other piece) ----
+    let a5: Vec<ExprNode> = sym_arena_new();
+    let t5: SymbolTable = symtab_new();
+    let vx1: i64 = sym_var(mut ref a5, mut ref t5, "x");
+    let vx2: i64 = sym_var(mut ref a5, mut ref t5, "x");
+    let vx3: i64 = sym_var(mut ref a5, mut ref t5, "x");
+    let vx4: i64 = sym_var(mut ref a5, mut ref t5, "x");
+    let c2: i64 = sym_num(mut ref a5, 2);
+    let c3: i64 = sym_num(mut ref a5, 3);
+    let c4: i64 = sym_num(mut ref a5, 4);
+    let t2x: i64 = sym_mul(mut ref a5, c2, vx1);
+    let t3x: i64 = sym_mul(mut ref a5, c3, vx2);
+    let t4x: i64 = sym_mul(mut ref a5, c4, vx4);
+    let s1: i64 = sym_add(mut ref a5, t2x, t3x);
+    let s2: i64 = sym_sub(mut ref a5, s1, vx3);
+    let e5: i64 = sym_sub(mut ref a5, s2, t4x);
+
+    let d5: Vec<ExprNode> = sym_arena_new();
+    let r5: i64 = sym_simplify(ref a5, e5, mut ref d5);
+    assert d5[r5].kind == 0 && d5[r5].value == 0;
+
+    let j: i64 = 0;
+    while j < 8 {
+        let xv2: i64 = rand_in_range(0 - 30, 30);
+        let vals2: Vec<i64> = vec(xv2);
+        assert sym_eval(ref a5, e5, ref vals2) == sym_eval(ref d5, r5, ref vals2);
+        j = j + 1;
+    }
+
+    print "simplify collect ok";
+    return 0;
+}

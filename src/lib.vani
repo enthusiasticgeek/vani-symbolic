@@ -493,14 +493,7 @@ fn sym_simplify(src: ref Vec<ExprNode>, root: i64, dst: mut ref Vec<ExprNode>) -
         return sym_neg(dst, inner);
     }
     if node.kind == 2 || node.kind == 3 {
-        // Add/Sub: Layer 2 (flatten + like-term collection) not built
-        // yet -- simplify children, rebuild plainly.
-        let l: i64 = sym_simplify(src, node.left, dst);
-        let r: i64 = sym_simplify(src, node.right, dst);
-        if node.kind == 2 {
-            return sym_add(dst, l, r);
-        }
-        return sym_sub(dst, l, r);
+        return _sym_simplify_sum(src, root, dst);
     }
 
     // Mul, Div, Pow: simplify children, then constant-fold or apply
@@ -569,4 +562,181 @@ fn _sym_fold_binary(kind: i64, lv: i64, rv: i64) -> i64 {
     }
     assert rv >= 0;
     return _sym_ipow(lv, rv);
+}
+
+// Layer 2: flatten a chain of nested Add/Sub nodes (stopping at any
+// other kind) into parallel (sign, src_term_idx) accumulators. Descending
+// into an Add's children keeps the incoming sign for both; descending
+// into a Sub's children keeps it for the left child and flips it for
+// the right. Terms themselves are left unsimplified here -- the caller
+// (_sym_simplify_sum) simplifies each one individually so folding and
+// identities apply within a term before classification.
+// NO #[wcet]: recursion depth is the tree depth, a runtime value.
+fn _sym_flatten_sum(src: ref Vec<ExprNode>, root: i64, signs: mut ref Vec<i64>, terms: mut ref Vec<i64>, sign: i64) {
+    let node: ExprNode = src[root];
+    if node.kind == 2 {
+        _sym_flatten_sum(src, node.left, signs, terms, sign);
+        _sym_flatten_sum(src, node.right, signs, terms, sign);
+    } else {
+        if node.kind == 3 {
+            _sym_flatten_sum(src, node.left, signs, terms, sign);
+            _sym_flatten_sum(src, node.right, signs, terms, 0 - sign);
+        } else {
+            push(signs, sign);
+            push(terms, root);
+        }
+    }
+}
+
+// Layer 2 entry point for any Add/Sub node reached by sym_simplify's
+// top-level dispatch. Scope (see the v0.2.0 plan for the full
+// rationale): only collects terms that are a Num, a bare Var, or a
+// Mul(Num,Var)/Mul(Var,Num) single-variable monomial -- anything else
+// (a product of two variables, a Pow, a nested non-monomial Mul, ...)
+// is kept as an opaque, unmerged term in its original relative
+// position. This is NOT general polynomial normal form.
+// NO #[wcet]: loop bounds are the number of flattened terms, a runtime
+// value.
+// WCET formula: ~60 * (number of flattened terms)^2 (the var-lookup and
+// sort steps are both O(terms) per term in the worst case).
+fn _sym_simplify_sum(src: ref Vec<ExprNode>, root: i64, dst: mut ref Vec<ExprNode>) -> i64 {
+    let signs: Vec<i64> = vec();
+    let terms: Vec<i64> = vec();
+    _sym_flatten_sum(src, root, mut ref signs, mut ref terms, 1);
+
+    let const_acc: i64 = 0;
+    let found_ids: Vec<i64> = vec();
+    let found_coeffs: Vec<i64> = vec();
+    let found_nodes: Vec<i64> = vec();
+    let opaque_signs: Vec<i64> = vec();
+    let opaque_idxs: Vec<i64> = vec();
+
+    let i: i64 = 0;
+    let n: i64 = len(ref terms) as i64;
+    while i < n {
+        let s: i64 = signs[i];
+        let t: i64 = terms[i];
+        let simplified: i64 = sym_simplify(src, t, dst);
+        let sk: i64 = dst[simplified].kind;
+
+        if sk == 0 {
+            const_acc = const_acc + s * dst[simplified].value;
+        } else {
+            let var_id: i64 = 0 - 1;
+            let coeff: i64 = 0;
+            let is_monomial: bool = false;
+            let var_node_idx: i64 = simplified;
+
+            if sk == 1 {
+                var_id = dst[simplified].value;
+                coeff = s;
+                is_monomial = true;
+            } else {
+                if sk == 4 {
+                    let lch: ExprNode = dst[dst[simplified].left];
+                    let rch: ExprNode = dst[dst[simplified].right];
+                    if lch.kind == 0 && rch.kind == 1 {
+                        var_id = rch.value;
+                        coeff = s * lch.value;
+                        is_monomial = true;
+                        var_node_idx = dst[simplified].right;
+                    } else {
+                        if lch.kind == 1 && rch.kind == 0 {
+                            var_id = lch.value;
+                            coeff = s * rch.value;
+                            is_monomial = true;
+                            var_node_idx = dst[simplified].left;
+                        }
+                    }
+                }
+            }
+
+            if is_monomial {
+                let j: i64 = 0;
+                let found_n: i64 = len(ref found_ids) as i64;
+                let found: bool = false;
+                while j < found_n {
+                    if found_ids[j] == var_id {
+                        set(mut ref found_coeffs, j, found_coeffs[j] + coeff);
+                        found = true;
+                    }
+                    j = j + 1;
+                }
+                if found == false {
+                    push(mut ref found_ids, var_id);
+                    push(mut ref found_coeffs, coeff);
+                    push(mut ref found_nodes, var_node_idx);
+                }
+            } else {
+                push(mut ref opaque_signs, s);
+                push(mut ref opaque_idxs, simplified);
+            }
+        }
+        i = i + 1;
+    }
+
+    // Rebuild: opaque terms (original order) first, then variable terms
+    // sorted by ascending var_id (small insertion sort -- the number of
+    // distinct variables in one flattened sum is small), then the
+    // constant last.
+    let result: i64 = 0 - 1;
+    let has_result: bool = false;
+
+    let oi: i64 = 0;
+    let on: i64 = len(ref opaque_idxs) as i64;
+    while oi < on {
+        let piece: i64 = opaque_idxs[oi];
+        if opaque_signs[oi] < 0 {
+            piece = sym_neg(dst, piece);
+        }
+        if has_result {
+            result = sym_add(dst, result, piece);
+        } else {
+            result = piece;
+            has_result = true;
+        }
+        oi = oi + 1;
+    }
+
+    let vn: i64 = len(ref found_ids) as i64;
+    let vi: i64 = 1;
+    while vi < vn {
+        let vj: i64 = vi;
+        while vj > 0 && found_ids[vj - 1] > found_ids[vj] {
+            vec_swap(mut ref found_ids, vj - 1, vj);
+            vec_swap(mut ref found_coeffs, vj - 1, vj);
+            vec_swap(mut ref found_nodes, vj - 1, vj);
+            vj = vj - 1;
+        }
+        vi = vi + 1;
+    }
+
+    let vk: i64 = 0;
+    while vk < vn {
+        let coeff: i64 = found_coeffs[vk];
+        if coeff != 0 {
+            let piece: i64 = found_nodes[vk];
+            if coeff != 1 {
+                piece = sym_mul(dst, sym_num(dst, coeff), piece);
+            }
+            if has_result {
+                result = sym_add(dst, result, piece);
+            } else {
+                result = piece;
+                has_result = true;
+            }
+        }
+        vk = vk + 1;
+    }
+
+    if const_acc != 0 || has_result == false {
+        if has_result {
+            result = sym_add(dst, result, sym_num(dst, const_acc));
+        } else {
+            result = sym_num(dst, const_acc);
+            has_result = true;
+        }
+    }
+
+    return result;
 }
