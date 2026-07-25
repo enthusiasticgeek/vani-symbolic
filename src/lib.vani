@@ -547,6 +547,7 @@ fn sym_simplify(src: ref Vec<ExprNode>, root: i64, dst: mut ref Vec<ExprNode>) -
 // depend on any variable.
 // NO #[wcet]: calls _sym_ipow, whose own cost is a runtime-log(exponent)
 // loop.
+#[bounded_stack(bytes = 200)]
 fn _sym_fold_binary(kind: i64, lv: i64, rv: i64) -> i64 {
     if kind == 2 {
         return lv + rv;
