@@ -440,3 +440,133 @@ fn _sym_wrap_if_needed(s: OwnedStr, my_prec: i64, min_required: i64) -> OwnedStr
     }
     return s;
 }
+
+// ── Simplification (v0.2.0) ─────────────────────────────────────────────
+
+// Builds a simplified copy of the subtree rooted at `root` (an index
+// into `src`) into `dst` -- a SEPARATE arena the caller owns, appended
+// to via the same builder functions construction uses (sym_num,
+// sym_add, ...). `dst` is typically empty at the top-level call; it is
+// never mutated in place, matching the "arena only ever grows, a
+// simplifier builds a fresh output arena rather than rewriting nodes"
+// note from v0.1.0. Returns the index of the simplified result in
+// `dst`. No SymbolTable needed -- everything here operates on var_ids
+// numerically, names are never compared or read.
+//
+// Two layers, in order of implementation (see kosh-index/ROADMAP.md's
+// vani-symbolic scoping breakdown for the full phased plan this splits
+// across versions):
+//  - Layer 1 (this version): bottom-up constant folding + identities
+//    for Num/Var/Neg/Mul/Div/Pow. Add/Sub currently only recurse into
+//    their children and rebuild plainly (no folding/identities/like-
+//    term collection yet) -- always correct, just not yet as simplified
+//    as it will be once Layer 2 lands in the same version.
+//  - Layer 2 (next in this same version, not yet built): replaces the
+//    plain Add/Sub handling below with flatten-and-collect (see the
+//    scoping breakdown's Layer 2 description).
+//
+// NO #[wcet]: recursion depth is the tree depth, a runtime value.
+// WCET formula: ~40 * (number of nodes in the subtree rooted at `root`).
+fn sym_simplify(src: ref Vec<ExprNode>, root: i64, dst: mut ref Vec<ExprNode>) -> i64 {
+    let node: ExprNode = src[root];
+
+    if node.kind == 0 {
+        return sym_num(dst, node.value);
+    }
+    if node.kind == 1 {
+        push(dst, ExprNode { kind: 1, value: node.value, left: 0 - 1, right: 0 - 1 });
+        return (len(dst) as i64) - 1;
+    }
+    if node.kind == 7 {
+        let inner: i64 = sym_simplify(src, node.left, dst);
+        // Neg(Neg(x)) -> x. Correct even for deeper chains: each pair
+        // of adjacent Negs cancels one level at a time as the
+        // recursion unwinds (see src/lib.vani design notes / plan for
+        // the traced-through 4-deep example).
+        if dst[inner].kind == 7 {
+            return dst[inner].left;
+        }
+        // Neg(Num) -> Num.
+        if dst[inner].kind == 0 {
+            return sym_num(dst, 0 - dst[inner].value);
+        }
+        return sym_neg(dst, inner);
+    }
+    if node.kind == 2 || node.kind == 3 {
+        // Add/Sub: Layer 2 (flatten + like-term collection) not built
+        // yet -- simplify children, rebuild plainly.
+        let l: i64 = sym_simplify(src, node.left, dst);
+        let r: i64 = sym_simplify(src, node.right, dst);
+        if node.kind == 2 {
+            return sym_add(dst, l, r);
+        }
+        return sym_sub(dst, l, r);
+    }
+
+    // Mul, Div, Pow: simplify children, then constant-fold or apply
+    // identities on the (already-simplified) results.
+    let l: i64 = sym_simplify(src, node.left, dst);
+    let r: i64 = sym_simplify(src, node.right, dst);
+    let lk: i64 = dst[l].kind;
+    let rk: i64 = dst[r].kind;
+
+    if lk == 0 && rk == 0 {
+        return sym_num(dst, _sym_fold_binary(node.kind, dst[l].value, dst[r].value));
+    }
+    if node.kind == 4 {
+        if rk == 0 && dst[r].value == 1 {
+            return l; // x*1 -> x
+        }
+        if lk == 0 && dst[l].value == 1 {
+            return r; // 1*x -> x
+        }
+        if rk == 0 && dst[r].value == 0 {
+            return sym_num(dst, 0); // x*0 -> 0
+        }
+        if lk == 0 && dst[l].value == 0 {
+            return sym_num(dst, 0); // 0*x -> 0
+        }
+        return sym_mul(dst, l, r);
+    }
+    if node.kind == 5 {
+        if rk == 0 && dst[r].value == 1 {
+            return l; // x/1 -> x
+        }
+        return sym_div(dst, l, r);
+    }
+    // Pow.
+    if rk == 0 && dst[r].value == 1 {
+        return l; // x^1 -> x
+    }
+    if rk == 0 && dst[r].value == 0 {
+        // x^0 -> 1, safe unconditionally (even x=0): _sym_ipow already
+        // returns 1 for exponent 0 regardless of base, matching
+        // sym_eval's existing behavior exactly -- not a new special
+        // case introduced by simplification.
+        return sym_num(dst, 1);
+    }
+    return sym_pow(dst, l, r);
+}
+
+// Mirrors sym_eval's binary-op dispatch (kinds 2-6) exactly, including
+// trap semantics -- folding a literal Num/0 still traps, correctly:
+// the original would trap there too, unconditionally, since it doesn't
+// depend on any variable.
+// NO #[wcet]: calls _sym_ipow, whose own cost is a runtime-log(exponent)
+// loop.
+fn _sym_fold_binary(kind: i64, lv: i64, rv: i64) -> i64 {
+    if kind == 2 {
+        return lv + rv;
+    }
+    if kind == 3 {
+        return lv - rv;
+    }
+    if kind == 4 {
+        return lv * rv;
+    }
+    if kind == 5 {
+        return lv / rv;
+    }
+    assert rv >= 0;
+    return _sym_ipow(lv, rv);
+}

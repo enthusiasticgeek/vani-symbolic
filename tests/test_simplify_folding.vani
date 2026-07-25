@@ -1,0 +1,159 @@
+// Tests for sym_simplify's Layer 1: constant folding and identities for
+// Neg/Mul/Div/Pow (Add/Sub are still plain pass-through recursion at
+// this layer -- Layer 2 replaces that). Exact-structure assertions for
+// each fold/identity, plus a property-based check (seed_rng +
+// rand_in_range, several sample points per expression) confirming
+// evaluation is preserved under simplification -- the primary
+// correctness gate per this package's v0.2.0 plan.
+// Run with:  vanic test tests/test_simplify_folding.vani
+
+use "../src/lib.vani";
+
+// Resamples until nonzero -- used wherever a random value feeds a
+// divisor, so property-based sampling never accidentally exercises the
+// ORIGINAL expression's own division-by-zero trap (out of scope for
+// this test: simplification is only required to preserve behavior
+// where the original is well-defined, per the v0.2.0 plan's policy).
+fn rand_nonzero(lo: i64, hi: i64) -> i64 {
+    let v: i64 = rand_in_range(lo, hi);
+    while v == 0 {
+        v = rand_in_range(lo, hi);
+    }
+    return v;
+}
+
+fn main() -> i64 {
+    seed_rng(12345);
+
+    // ---- Constant folding: exact structure ----
+    // Add/Sub constant folding is Layer 2's job (this layer only folds
+    // Mul/Div/Pow/Neg -- Add/Sub still just recurse-and-rebuild plainly
+    // until Layer 2's flatten-and-collect lands in the same version;
+    // see tests/test_simplify_collect.vani for `2+3`-shaped cases).
+    let a1: Vec<ExprNode> = sym_arena_new();
+    let d1: Vec<ExprNode> = sym_arena_new();
+    let n2: i64 = sym_num(mut ref a1, 2);
+    let n3: i64 = sym_num(mut ref a1, 3);
+
+    let mul_r: i64 = sym_simplify(ref a1, sym_mul(mut ref a1, n2, n3), mut ref d1);
+    assert d1[mul_r].kind == 0 && d1[mul_r].value == 6;
+
+    let n10: i64 = sym_num(mut ref a1, 10);
+    let div_r: i64 = sym_simplify(ref a1, sym_div(mut ref a1, n10, n3), mut ref d1);
+    assert d1[div_r].kind == 0 && d1[div_r].value == 3; // truncating division
+
+    let n4: i64 = sym_num(mut ref a1, 4);
+    let pow_r: i64 = sym_simplify(ref a1, sym_pow(mut ref a1, n2, n4), mut ref d1);
+    assert d1[pow_r].kind == 0 && d1[pow_r].value == 16;
+
+    let neg_r: i64 = sym_simplify(ref a1, sym_neg(mut ref a1, n2), mut ref d1);
+    assert d1[neg_r].kind == 0 && d1[neg_r].value == (0 - 2);
+
+    // ---- Identities: exact structure, on Var-involving expressions ----
+    let a2: Vec<ExprNode> = sym_arena_new();
+    let t2: SymbolTable = symtab_new();
+    let d2: Vec<ExprNode> = sym_arena_new();
+    let x: i64 = sym_var(mut ref a2, mut ref t2, "x");
+    let one: i64 = sym_num(mut ref a2, 1);
+    let zero: i64 = sym_num(mut ref a2, 0);
+
+    // x*1 -> x, 1*x -> x
+    let r1: i64 = sym_simplify(ref a2, sym_mul(mut ref a2, x, one), mut ref d2);
+    assert d2[r1].kind == 1;
+    let r2: i64 = sym_simplify(ref a2, sym_mul(mut ref a2, one, x), mut ref d2);
+    assert d2[r2].kind == 1;
+
+    // x*0 -> 0, 0*x -> 0
+    let r3: i64 = sym_simplify(ref a2, sym_mul(mut ref a2, x, zero), mut ref d2);
+    assert d2[r3].kind == 0 && d2[r3].value == 0;
+    let r4: i64 = sym_simplify(ref a2, sym_mul(mut ref a2, zero, x), mut ref d2);
+    assert d2[r4].kind == 0 && d2[r4].value == 0;
+
+    // x/1 -> x
+    let r5: i64 = sym_simplify(ref a2, sym_div(mut ref a2, x, one), mut ref d2);
+    assert d2[r5].kind == 1;
+
+    // x^1 -> x, x^0 -> 1
+    let r6: i64 = sym_simplify(ref a2, sym_pow(mut ref a2, x, one), mut ref d2);
+    assert d2[r6].kind == 1;
+    let r7: i64 = sym_simplify(ref a2, sym_pow(mut ref a2, x, zero), mut ref d2);
+    assert d2[r7].kind == 0 && d2[r7].value == 1;
+
+    // Neg(Neg(x)) -> x (returns the SAME dst node x was simplified to).
+    let neg_x: i64 = sym_neg(mut ref a2, x);
+    let neg_neg_x: i64 = sym_neg(mut ref a2, neg_x);
+    let r8: i64 = sym_simplify(ref a2, neg_neg_x, mut ref d2);
+    assert d2[r8].kind == 1;
+
+    // Composition: Neg(Mul(x,1)) -> Mul simplifies to x first, then
+    // Neg(x) has no further identity (x is Var, not Num/Neg) -> Neg(x).
+    let mul_x_1: i64 = sym_mul(mut ref a2, x, one);
+    let neg_mul: i64 = sym_neg(mut ref a2, mul_x_1);
+    let r9: i64 = sym_simplify(ref a2, neg_mul, mut ref d2);
+    assert d2[r9].kind == 7;
+    assert d2[d2[r9].left].kind == 1;
+
+    // ---- Property-based: evaluation preserved under simplification ----
+    // Each expression sampled at several random points; x^0 case is
+    // sampled including x=0 specifically since that's the edge case the
+    // "safe unconditionally" identity claim rests on.
+    let a3: Vec<ExprNode> = sym_arena_new();
+    let t3: SymbolTable = symtab_new();
+    let px: i64 = sym_var(mut ref a3, mut ref t3, "x");
+    let p_one: i64 = sym_num(mut ref a3, 1);
+    let p_zero: i64 = sym_num(mut ref a3, 0);
+
+    let e_mul1: i64 = sym_mul(mut ref a3, px, p_one);       // x*1
+    let e_pow0: i64 = sym_pow(mut ref a3, px, p_zero);      // x^0
+    let e_negneg: i64 = sym_neg(mut ref a3, sym_neg(mut ref a3, px)); // -(-x)
+    let e_composed: i64 = sym_neg(mut ref a3, sym_mul(mut ref a3, px, p_one)); // -(x*1)
+
+    let d3a: Vec<ExprNode> = sym_arena_new();
+    let s_mul1: i64 = sym_simplify(ref a3, e_mul1, mut ref d3a);
+    let d3b: Vec<ExprNode> = sym_arena_new();
+    let s_pow0: i64 = sym_simplify(ref a3, e_pow0, mut ref d3b);
+    let d3c: Vec<ExprNode> = sym_arena_new();
+    let s_negneg: i64 = sym_simplify(ref a3, e_negneg, mut ref d3c);
+    let d3d: Vec<ExprNode> = sym_arena_new();
+    let s_composed: i64 = sym_simplify(ref a3, e_composed, mut ref d3d);
+
+    // x=0 explicitly, then several random points.
+    let vals0: Vec<i64> = vec(0);
+    assert sym_eval(ref a3, e_mul1, ref vals0) == sym_eval(ref d3a, s_mul1, ref vals0);
+    assert sym_eval(ref a3, e_pow0, ref vals0) == sym_eval(ref d3b, s_pow0, ref vals0);
+    assert sym_eval(ref a3, e_negneg, ref vals0) == sym_eval(ref d3c, s_negneg, ref vals0);
+    assert sym_eval(ref a3, e_composed, ref vals0) == sym_eval(ref d3d, s_composed, ref vals0);
+
+    let i: i64 = 0;
+    while i < 8 {
+        let xv: i64 = rand_in_range(0 - 20, 20);
+        let vals: Vec<i64> = vec(xv);
+        assert sym_eval(ref a3, e_mul1, ref vals) == sym_eval(ref d3a, s_mul1, ref vals);
+        assert sym_eval(ref a3, e_pow0, ref vals) == sym_eval(ref d3b, s_pow0, ref vals);
+        assert sym_eval(ref a3, e_negneg, ref vals) == sym_eval(ref d3c, s_negneg, ref vals);
+        assert sym_eval(ref a3, e_composed, ref vals) == sym_eval(ref d3d, s_composed, ref vals);
+        i = i + 1;
+    }
+
+    // A Div-involving property case with a genuinely random, resampled-
+    // nonzero denominator (10 / d, d never a literal 1, so no identity
+    // fires -- structural pass-through -- but exercises the trap-free
+    // sampling helper for when Layer 2 needs it too).
+    let a4: Vec<ExprNode> = sym_arena_new();
+    let t4: SymbolTable = symtab_new();
+    let py: i64 = sym_var(mut ref a4, mut ref t4, "y");
+    let p_ten: i64 = sym_num(mut ref a4, 10);
+    let e_div: i64 = sym_div(mut ref a4, p_ten, py);
+    let d4: Vec<ExprNode> = sym_arena_new();
+    let s_div: i64 = sym_simplify(ref a4, e_div, mut ref d4);
+    let j: i64 = 0;
+    while j < 8 {
+        let yv: i64 = rand_nonzero(0 - 20, 20);
+        let valsy: Vec<i64> = vec(yv);
+        assert sym_eval(ref a4, e_div, ref valsy) == sym_eval(ref d4, s_div, ref valsy);
+        j = j + 1;
+    }
+
+    print "simplify folding ok";
+    return 0;
+}
