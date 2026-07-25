@@ -1,0 +1,111 @@
+// Tests for arena/symtab construction: one case per builder, symtab
+// interning/dedup, and a deeply-nested chained build exercising every
+// kind in one expression tree: ((((1+2)*3)-4)/5)^2
+// Run with:  vanic test tests/test_construction.vani
+
+use "../src/lib.vani";
+
+fn main() -> i64 {
+    // Empty arena/symtab start empty.
+    let arena0: Vec<ExprNode> = sym_arena_new();
+    let table0: SymbolTable = symtab_new();
+    assert len(ref arena0) == 0;
+    assert len(ref table0.names) == 0;
+
+    // sym_num pushes a Num leaf (kind 0).
+    let arena: Vec<ExprNode> = sym_arena_new();
+    let n42: i64 = sym_num(mut ref arena, 42);
+    assert n42 == 0;
+    assert len(ref arena) == 1;
+    assert arena[n42].kind == 0;
+    assert arena[n42].value == 42;
+    assert arena[n42].left == (0 - 1);
+    assert arena[n42].right == (0 - 1);
+
+    // sym_var interns and pushes a Var leaf (kind 1); same name -> same
+    // var_id (arena[idx].value), different arena node each call.
+    let table: SymbolTable = symtab_new();
+    let idx_x: i64 = sym_var(mut ref arena, mut ref table, "x");
+    let idx_y: i64 = sym_var(mut ref arena, mut ref table, "y");
+    let idx_x2: i64 = sym_var(mut ref arena, mut ref table, "x");
+    assert len(ref table.names) == 2;
+    assert arena[idx_x].kind == 1;
+    assert arena[idx_x].value == arena[idx_x2].value;
+    assert arena[idx_x].value != arena[idx_y].value;
+    assert idx_x != idx_x2;
+
+    // symtab_intern dedups and assigns sequential ids on its own.
+    let table2: SymbolTable = symtab_new();
+    let id_a: i64 = symtab_intern(mut ref table2, "a");
+    let id_b: i64 = symtab_intern(mut ref table2, "b");
+    let id_a2: i64 = symtab_intern(mut ref table2, "a");
+    let id_c: i64 = symtab_intern(mut ref table2, "c");
+    assert id_a == 0;
+    assert id_b == 1;
+    assert id_a2 == 0;
+    assert id_c == 2;
+    assert len(ref table2.names) == 3;
+
+    // Every binary builder produces the expected kind + children.
+    let arena3: Vec<ExprNode> = sym_arena_new();
+    let one: i64 = sym_num(mut ref arena3, 1);
+    let two: i64 = sym_num(mut ref arena3, 2);
+
+    let add_idx: i64 = sym_add(mut ref arena3, one, two);
+    assert arena3[add_idx].kind == 2;
+    assert arena3[add_idx].left == one;
+    assert arena3[add_idx].right == two;
+
+    let sub_idx: i64 = sym_sub(mut ref arena3, one, two);
+    assert arena3[sub_idx].kind == 3;
+    assert arena3[sub_idx].left == one;
+    assert arena3[sub_idx].right == two;
+
+    let mul_idx: i64 = sym_mul(mut ref arena3, one, two);
+    assert arena3[mul_idx].kind == 4;
+
+    let div_idx: i64 = sym_div(mut ref arena3, one, two);
+    assert arena3[div_idx].kind == 5;
+
+    let pow_idx: i64 = sym_pow(mut ref arena3, one, two);
+    assert arena3[pow_idx].kind == 6;
+    assert arena3[pow_idx].left == one;
+    assert arena3[pow_idx].right == two;
+
+    // Neg is unary: left is the child, right stays -1.
+    let neg_idx: i64 = sym_neg(mut ref arena3, one);
+    assert arena3[neg_idx].kind == 7;
+    assert arena3[neg_idx].left == one;
+    assert arena3[neg_idx].right == (0 - 1);
+
+    // Deeply nested chained build: ((((1+2)*3)-4)/5)^2
+    let arena4: Vec<ExprNode> = sym_arena_new();
+    let d1: i64 = sym_num(mut ref arena4, 1);
+    let d2: i64 = sym_num(mut ref arena4, 2);
+    let d3: i64 = sym_num(mut ref arena4, 3);
+    let d4: i64 = sym_num(mut ref arena4, 4);
+    let d5: i64 = sym_num(mut ref arena4, 5);
+    let d2b: i64 = sym_num(mut ref arena4, 2);
+
+    let s_add: i64 = sym_add(mut ref arena4, d1, d2);
+    let s_mul: i64 = sym_mul(mut ref arena4, s_add, d3);
+    let s_sub: i64 = sym_sub(mut ref arena4, s_mul, d4);
+    let s_div: i64 = sym_div(mut ref arena4, s_sub, d5);
+    let s_pow: i64 = sym_pow(mut ref arena4, s_div, d2b);
+
+    assert arena4[s_pow].kind == 6;
+    assert arena4[s_pow].left == s_div;
+    assert arena4[s_div].kind == 5;
+    assert arena4[s_div].left == s_sub;
+    assert arena4[s_sub].kind == 3;
+    assert arena4[s_sub].left == s_mul;
+    assert arena4[s_mul].kind == 4;
+    assert arena4[s_mul].left == s_add;
+    assert arena4[s_add].kind == 2;
+    assert arena4[s_add].left == d1;
+    assert arena4[s_add].right == d2;
+    assert len(ref arena4) == 11;
+
+    print "construction ok";
+    return 0;
+}

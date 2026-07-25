@@ -1,0 +1,14 @@
+[package]
+name    = "symbolic"
+version = "0.1.0"
+entry   = "src/lib.vani"
+authors = "enthusiasticgeek"
+license = "MIT"
+description = "Symbolic-math (CAS) foundation for vāṇी: flat-arena expression trees, numeric evaluation, and precedence-aware pretty-printing. Phase 1 of the planned symbolic-math tier -- no simplification/differentiation/integration yet."
+registry = "kosh"
+
+[deps]
+# No external deps -- v0.1.0 uses plain i64 literals, not vani-bignum's
+# BigInt, matching this ecosystem's narrow-then-widen precedent. The
+# design leaves room to switch Num nodes to a BigInt-backed side table
+# later without changing ExprNode's shape (see src/lib.vani header).

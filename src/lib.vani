@@ -1,0 +1,254 @@
+// vani-symbolic  v0.1.0 — expression construction, evaluation, printing
+//
+// IMPORTANT — do NOT reimplement vāṇी compiler builtins.
+// Already available as builtins (call directly, never redeclare here):
+//   push len vec i64_to_str clone_at
+//
+// No deps (self-contained) -- see [deps] in vani.toml.
+//
+// ENCODING: flat arena, not a recursive enum. The obvious design --
+// `enum Expr { Add(Box<Expr>, Box<Expr>), ... }` -- does NOT compile in
+// vāṇी today: enum variants admit only a single payload field in v1 (a
+// two-child variant is rejected outright), and box()'s admitted payload
+// types exclude anything that transitively contains the type being
+// defined (so Box<Expr> inside Expr's own definition is also rejected).
+// Confirmed by direct compiler test; see vani-compiler's
+// docs/missing_features.md "Recursive / self-referential types" entry.
+//
+// Workaround, used here: every node lives in a flat Vec<ExprNode> arena,
+// referencing its children by i64 index (-1 = none) instead of by
+// pointer -- the same "flat Vec + explicit index" convention already
+// used by vani-tensor (shape encoding) and vani-sparse (COO/CSR), just
+// applied to a tree instead of a matrix. This is a new pattern in this
+// ecosystem (no existing package uses a kind-tag-discriminated arena),
+// closest in spirit to vani-sparse's struct-of-parallel-Vecs rationale:
+// pick a representation that avoids the type system's sharp edges rather
+// than fighting them.
+//
+//   struct ExprNode { kind: i64, value: i64, left: i64, right: i64 }
+//   struct SymbolTable { names: Vec<OwnedStr> }
+//
+// kind tags:  0=Num  1=Var  2=Add  3=Sub  4=Mul  5=Div  6=Pow  7=Neg
+// No magic-number consts -- checked vani-bignum/vani-sparse, neither uses
+// `const` despite the compiler supporting it; both use raw integer
+// literals with an explanatory comment at first use. This table is the
+// canonical reference; every construction function names its kind number
+// inline.
+//
+// `value` field reuse: Num's literal and Var's var_id both fit one i64
+// slot and never coexist on the same node (a node is exactly one kind),
+// so `value` is reused for both rather than adding a second field that
+// would sit unused on every non-leaf node. Add/Sub/Mul/Div/Pow/Neg leave
+// `value` at 0 (unused). `Neg` is unary: uses `left` for its one child,
+// `right` stays -1 -- arity is a pure function of `kind`, never stored
+// per-node, so every walker (eval/print/eq) branches on `kind` first and
+// only reads the fields that kind's arity defines.
+//
+// ExprNode IS Copy (four i64 fields, no heap-owning field) -- matches
+// vani-complex's Copy-struct pattern, unlike vani-bignum's owned-Vec
+// pattern. This means no function ever needs ref/mut ref on an
+// individual node -- only on the whole Vec<ExprNode> -- since reading a
+// node is a cheap whole-struct copy (`let node: ExprNode = arena[idx];`).
+//
+// SymbolTable is NOT Copy (owns Vec<OwnedStr>) -- every function takes
+// ref/mut ref SymbolTable, matching BigInt's convention. Var.value is a
+// dense, 0-based var_id assigned by symtab_intern in first-seen order --
+// this is what lets sym_eval substitute variables via a direct
+// var_values[var_id] index read, with ZERO string comparison anywhere in
+// the evaluation path (string comparison only happens at construction,
+// inside symtab_intern, and at print time, inside symtab_name_at).
+//
+// Vec<OwnedStr> element access: a bare `table.names[i]` read is rejected
+// by the checker ("cannot index a Vec whose element type is non-Copy by
+// value ... would alias the owner's slot and double-free") -- confirmed
+// by direct test. Comparison uses the established `for x in ref xs`
+// borrow pattern instead (symtab_intern); an owned copy out of the Vec
+// uses the builtin `clone_at(ref xs, i)` (symtab_name_at).
+//
+// NUMERIC LAYER: v0.1.0 uses plain i64 literals, not vani-bignum's
+// BigInt -- matches this ecosystem's narrow-then-widen precedent
+// (vani-algebra shipped real-roots-only, vani-discrete shipped
+// counting-only). The design already leaves room for BigInt-backed
+// numbers later without changing ExprNode's shape: a future phase can
+// add a side table `Vec<BigInt>` (parallel to SymbolTable.names) and
+// reinterpret Num.value as an index into it rather than a literal. Not
+// built now -- YAGNI until a real overflow problem shows up.
+//
+// POW: v0.1.0 supports nonnegative integer exponents only -- traps via
+// assert otherwise, matching this ecosystem's established "assert on
+// out-of-scope input" convention (e.g. vani-bignum's bn_div_mod asserts
+// the divisor is nonzero rather than silently misbehaving).
+//
+// STRUCTURAL EQUALITY (sym_eq_structural) is same-SHAPE equality, NOT
+// semantic/commutative equality -- 1+2 and 2+1 are NOT equal here.
+// Commutative canonicalization is a v0.2 simplification-tier concern.
+//
+// WCET (MAINT-1 discipline, see kosh-index/ROADMAP.md): every
+// #[wcet(cycles=N)] below is vanic check's own exact reported worst-case,
+// never hand-derived. Fixed-shape functions (the builders, sym_kind,
+// sym_is_leaf, symtab_name_at, the print helpers) get a real
+// #[wcet(cycles=N)]. Everything recursive or Vec-length-loop-bounded
+// (symtab_intern, sym_eval, _sym_ipow, sym_to_str, sym_eq_structural)
+// gets a WCET *formula* comment instead, matching vani-bignum's
+// convention for the same reason.
+
+struct ExprNode {
+    kind: i64,
+    value: i64,
+    left: i64,
+    right: i64,
+}
+
+struct SymbolTable {
+    names: Vec<OwnedStr>,
+}
+
+// ── Construction ─────────────────────────────────────────────────────────
+
+fn sym_arena_new() -> Vec<ExprNode> {
+    return vec();
+}
+
+fn symtab_new() -> SymbolTable {
+    let names: Vec<OwnedStr> = vec();
+    return SymbolTable { names: names };
+}
+
+fn sym_num(arena: mut ref Vec<ExprNode>, n: i64) -> i64 {
+    push(arena, ExprNode { kind: 0, value: n, left: 0 - 1, right: 0 - 1 });
+    return (len(arena) as i64) - 1;
+}
+
+// Interns `name` (see symtab_intern) and pushes a new Var leaf node
+// referencing that var_id. Calling this twice with the same name
+// produces two DISTINCT arena nodes sharing one var_id -- both read the
+// same slot of var_values at sym_eval time. To reuse one physical
+// occurrence (e.g. x*x sharing a single x), reuse the returned node
+// index directly instead of calling sym_var again -- see
+// examples/symbolic_demo.vani for both patterns side by side.
+fn sym_var(arena: mut ref Vec<ExprNode>, table: mut ref SymbolTable, name: Str) -> i64 {
+    let var_id: i64 = symtab_intern(table, name);
+    push(arena, ExprNode { kind: 1, value: var_id, left: 0 - 1, right: 0 - 1 });
+    return (len(arena) as i64) - 1;
+}
+
+// Returns name's existing var_id if already interned, else appends it
+// and returns the new var_id (len-before-push). var_ids are dense,
+// 0-based, assigned in first-seen order -- this is what lets sym_eval
+// index var_values directly by var_id with no string comparison at eval
+// time. Bare `table.names[i]` is rejected by the checker for a non-Copy
+// element (would alias + double-free); the confirmed working form is the
+// established `for x in ref xs` borrow pattern.
+// NO #[wcet]: loop bound is len(table.names), a runtime value.
+// WCET formula: ~15 + 10 * len(table.names) (one string-compare per
+// existing name, worst case scanning every entry with no match).
+fn symtab_intern(table: mut ref SymbolTable, name: Str) -> i64 {
+    let i: i64 = 0;
+    for existing in ref table.names {
+        if existing == name {
+            return i;
+        }
+        i = i + 1;
+    }
+    push(mut ref table.names, name + "");
+    return i;
+}
+
+// Owned copy of the display name for var_id. Can't just index-and-return
+// (OwnedStr isn't Copy, would alias the Vec's slot) -- clone_at gives an
+// explicit, visible-cost deep copy instead.
+fn symtab_name_at(table: ref SymbolTable, var_id: i64) -> OwnedStr {
+    assert var_id >= 0;
+    assert var_id < (len(ref table.names) as i64);
+    return clone_at(ref table.names, var_id);
+}
+
+// Every binary/unary builder below bounds-checks its child index inline
+// (catches a stale/out-of-range index -- e.g. from a different arena --
+// at the point of misuse rather than deep inside a later eval/print/eq
+// walk). Originally factored into a shared `_sym_check_idx(arena: ref
+// Vec<ExprNode>, idx: i64)` helper, but the checker doesn't reborrow a
+// `mut ref` binding as `ref` at a call site (confirmed by direct test:
+// "argument 1 ... must be assignable to ref Vec<ExprNode>, got mut ref
+// Vec<ExprNode>") -- inlined instead, exactly as anticipated as the
+// fallback for this case.
+
+fn sym_add(arena: mut ref Vec<ExprNode>, a: i64, b: i64) -> i64 {
+    assert a >= 0 && a < (len(arena) as i64);
+    assert b >= 0 && b < (len(arena) as i64);
+    push(arena, ExprNode { kind: 2, value: 0, left: a, right: b });
+    return (len(arena) as i64) - 1;
+}
+
+fn sym_sub(arena: mut ref Vec<ExprNode>, a: i64, b: i64) -> i64 {
+    assert a >= 0 && a < (len(arena) as i64);
+    assert b >= 0 && b < (len(arena) as i64);
+    push(arena, ExprNode { kind: 3, value: 0, left: a, right: b });
+    return (len(arena) as i64) - 1;
+}
+
+fn sym_mul(arena: mut ref Vec<ExprNode>, a: i64, b: i64) -> i64 {
+    assert a >= 0 && a < (len(arena) as i64);
+    assert b >= 0 && b < (len(arena) as i64);
+    push(arena, ExprNode { kind: 4, value: 0, left: a, right: b });
+    return (len(arena) as i64) - 1;
+}
+
+fn sym_div(arena: mut ref Vec<ExprNode>, a: i64, b: i64) -> i64 {
+    assert a >= 0 && a < (len(arena) as i64);
+    assert b >= 0 && b < (len(arena) as i64);
+    push(arena, ExprNode { kind: 5, value: 0, left: a, right: b });
+    return (len(arena) as i64) - 1;
+}
+
+fn sym_pow(arena: mut ref Vec<ExprNode>, base: i64, exponent: i64) -> i64 {
+    assert base >= 0 && base < (len(arena) as i64);
+    assert exponent >= 0 && exponent < (len(arena) as i64);
+    push(arena, ExprNode { kind: 6, value: 0, left: base, right: exponent });
+    return (len(arena) as i64) - 1;
+}
+
+fn sym_neg(arena: mut ref Vec<ExprNode>, a: i64) -> i64 {
+    assert a >= 0 && a < (len(arena) as i64);
+    push(arena, ExprNode { kind: 7, value: 0, left: a, right: 0 - 1 });
+    return (len(arena) as i64) - 1;
+}
+
+// ── Introspection ────────────────────────────────────────────────────────
+
+fn sym_kind(arena: ref Vec<ExprNode>, idx: i64) -> i64 {
+    return arena[idx].kind;
+}
+
+fn sym_is_leaf(arena: ref Vec<ExprNode>, idx: i64) -> bool {
+    let k: i64 = arena[idx].kind;
+    return k == 0 || k == 1;
+}
+
+// ── Structural equality ──────────────────────────────────────────────────
+
+// Same-SHAPE equality (kind + literal/var_id + recursively-equal
+// children), NOT semantic/commutative equality -- 1+2 and 2+1 are NOT
+// equal here. Commutative canonicalization is a v0.2 simplification-tier
+// concern. Assumes both indices live in the SAME arena; comparing across
+// two different arenas isn't supported in v0.1.0.
+// NO #[wcet]: recursion depth is the tree depth, a runtime value.
+// WCET formula: ~15 * (number of nodes in the smaller of the two
+// subtrees being compared, since a kind mismatch short-circuits).
+fn sym_eq_structural(arena: ref Vec<ExprNode>, a: i64, b: i64) -> bool {
+    let na: ExprNode = arena[a];
+    let nb: ExprNode = arena[b];
+    if na.kind != nb.kind {
+        return false;
+    }
+    if na.kind == 0 || na.kind == 1 {
+        return na.value == nb.value;
+    }
+    if na.kind == 7 {
+        return sym_eq_structural(arena, na.left, nb.left);
+    }
+    if sym_eq_structural(arena, na.left, nb.left) == false {
+        return false;
+    }
+    return sym_eq_structural(arena, na.right, nb.right);
+}

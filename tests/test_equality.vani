@@ -1,0 +1,74 @@
+// Tests for sym_kind, sym_is_leaf, and sym_eq_structural: identical
+// trees, same-shape-different-literal, commutatively-equivalent-but-
+// structurally-different (1+2 vs 2+1, intentionally NOT equal here), and
+// a deeply nested tree compared against an independently rebuilt equal
+// copy vs. one differing only at the deepest leaf.
+// Run with:  vanic test tests/test_equality.vani
+
+use "../src/lib.vani";
+
+fn main() -> i64 {
+    // sym_kind / sym_is_leaf.
+    let arena: Vec<ExprNode> = sym_arena_new();
+    let n: i64 = sym_num(mut ref arena, 5);
+    let table: SymbolTable = symtab_new();
+    let v: i64 = sym_var(mut ref arena, mut ref table, "x");
+    let add_idx: i64 = sym_add(mut ref arena, n, v);
+
+    assert sym_kind(ref arena, n) == 0;
+    assert sym_kind(ref arena, v) == 1;
+    assert sym_kind(ref arena, add_idx) == 2;
+    assert sym_is_leaf(ref arena, n);
+    assert sym_is_leaf(ref arena, v);
+    assert !sym_is_leaf(ref arena, add_idx);
+
+    // Identical trees (literally the same index) are equal.
+    assert sym_eq_structural(ref arena, add_idx, add_idx);
+
+    // Same-shape-different-literal: 5+x vs 6+x.
+    let n6: i64 = sym_num(mut ref arena, 6);
+    let add_idx2: i64 = sym_add(mut ref arena, n6, v);
+    assert !sym_eq_structural(ref arena, add_idx, add_idx2);
+
+    // Commutatively-equivalent-but-structurally-different: 1+2 vs 2+1.
+    // Intentionally NOT equal -- structural equality only, no
+    // commutative canonicalization until the v0.2 simplification tier.
+    let one: i64 = sym_num(mut ref arena, 1);
+    let two: i64 = sym_num(mut ref arena, 2);
+    let one_plus_two: i64 = sym_add(mut ref arena, one, two);
+    let two_plus_one: i64 = sym_add(mut ref arena, two, one);
+    assert !sym_eq_structural(ref arena, one_plus_two, two_plus_one);
+
+    // Deeply nested: (x + 1)^2 - 2*(x - 3), built twice independently,
+    // must compare equal; a copy differing only at the deepest leaf
+    // (3 -> 4) must compare unequal.
+    let arena2: Vec<ExprNode> = sym_arena_new();
+    let table2: SymbolTable = symtab_new();
+    let tree_a: i64 = _build_deep_test_tree(mut ref arena2, mut ref table2, 3);
+    let tree_b: i64 = _build_deep_test_tree(mut ref arena2, mut ref table2, 3);
+    let tree_c: i64 = _build_deep_test_tree(mut ref arena2, mut ref table2, 4);
+    assert sym_eq_structural(ref arena2, tree_a, tree_b);
+    assert !sym_eq_structural(ref arena2, tree_a, tree_c);
+
+    print "equality ok";
+    return 0;
+}
+
+// Builds (x + 1)^2 - 2*(x - leaf_val) fresh in the given arena/table.
+// Kept private to this test file (not part of the package's public API)
+// since it exists purely to build two independent-but-equal trees for
+// the deep-equality case above.
+fn _build_deep_test_tree(arena: mut ref Vec<ExprNode>, table: mut ref SymbolTable, leaf_val: i64) -> i64 {
+    let x1: i64 = sym_var(arena, table, "x");
+    let one: i64 = sym_num(arena, 1);
+    let two: i64 = sym_num(arena, 2);
+    let x2: i64 = sym_var(arena, table, "x");
+    let leaf: i64 = sym_num(arena, leaf_val);
+
+    let x_plus_1: i64 = sym_add(arena, x1, one);
+    let two_lit: i64 = sym_num(arena, 2);
+    let squared: i64 = sym_pow(arena, x_plus_1, two_lit);
+    let x_minus_leaf: i64 = sym_sub(arena, x2, leaf);
+    let two_times: i64 = sym_mul(arena, two, x_minus_leaf);
+    return sym_sub(arena, squared, two_times);
+}
