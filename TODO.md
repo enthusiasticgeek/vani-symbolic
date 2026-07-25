@@ -91,6 +91,74 @@
 
 ---
 
+## v0.2.0 — Implemented ✓
+
+Flagged in the roadmap as the highest-risk phase in the whole symbolic
+tier -- a wrong rule silently poisons everything built on top of it.
+Scoped deliberately narrow (see `src/lib.vani`'s design notes and the
+v0.2.0 plan): like-term collection only covers flat linear combinations
+of `Num`/`Var`/`Mul(Num,Var)` monomials, NOT general polynomial normal
+form (no multiplicative factor combination, no cross-operator
+associativity flattening).
+
+### Simplification (1 function + 3 private helpers)
+- [x] `sym_simplify(src, root, dst)` -- builds a simplified copy into a
+      SEPARATE arena via the existing builder functions; never mutates
+      `src` in place (the arena only ever grows, per v0.1.0's design
+      note). Two layers:
+  - **Layer 1** (`Mul`/`Div`/`Pow`/`Neg`): constant folding (`Num op
+    Num -> Num`, via `_sym_fold_binary`, mirroring `sym_eval`'s exact
+    trap semantics) and identities (`x*1`/`1*x`, `x*0`/`0*x`, `x/1`,
+    `x^1`, `x^0` -- safe unconditionally even at `x=0`, matching
+    `_sym_ipow`'s existing behavior -- and `Neg(Neg(x)) -> x`, correct
+    for arbitrarily deep chains via how the recursion unwinds).
+  - **Layer 2** (`Add`/`Sub`, via `_sym_flatten_sum` +
+    `_sym_simplify_sum`): flattens a chain of nested `Add`/`Sub` into
+    signed terms, simplifies each individually, classifies as constant/
+    variable-monomial/opaque, collects like terms by `var_id` (sorted
+    ascending for canonical output), and rebuilds. Constant folding
+    through `Add`/`Sub` (`2+3->5`) falls out of this layer, not Layer 1.
+- [x] Explicit, documented semantics policy: simplification assumes
+      well-defined inputs. Since `sym_eval` is strict (both operands of
+      a binary op are evaluated before combining), an identity like
+      `0*x -> 0` changes *whether a trap occurs* if `x` itself would
+      trap -- validation only compares behavior at points where the
+      *original* expression evaluates successfully.
+
+### Tests
+- [x] `tests/test_simplify_folding.vani` -- exact-structure assertions
+      per Layer 1 fold/identity, plus **property-based validation**
+      (`seed_rng` + `rand_in_range`, 8 random sample points per
+      expression, deterministic across runs) confirming
+      `sym_eval(simplify(e)) == sym_eval(e)` -- the primary correctness
+      gate per the v0.2.0 plan, not just hand-picked examples. A
+      `rand_nonzero` resampling helper keeps sampled divisors from
+      triggering the *original* expression's own division-by-zero trap.
+- [x] `tests/test_simplify_collect.vani` -- the roadmap's own
+      `2x+3x->5x` example, `x-x->0`, constant folding through `Add`/
+      `Sub`, a mixed multi-term case (`2*x + y*y + 3 - x + 5`, combining
+      collection with an opaque `y*y` term) verified both by property-
+      based sampling and an exact spot-check, and a full-cancellation
+      case (`2x+3x-x-4x -> 0`).
+- [x] `examples/simplify_demo.vani` -- a deliberately messy expression
+      exercising every identity and the collection logic together in
+      one tree, simplifying to `6*x + -1*y + 3` (verified against a
+      hand-derivation) -- the composed check this package's build order
+      has required at the end of every phase so far.
+
+### Safety annotations
+- [x] `vanic audit-safety` reported exactly one missing attribute after
+      this version's functions were added (`_sym_fold_binary`); every
+      other new function is exempt from both `#[bounded_stack]` and
+      `#[wcet]` (recursion depth is the tree depth or the number of
+      flattened terms, a runtime value) -- confirmed to match the
+      v0.2.0 plan's prediction before implementation started.
+- [x] Full `vanic check` (real SMT verification) passes clean on every
+      test file and both examples, on both backends, deterministic
+      across repeated runs.
+
+---
+
 ## Future
 
 Phased breakdown (versions proposed, not committed) tracked in
@@ -98,11 +166,6 @@ Phased breakdown (versions proposed, not committed) tracked in
 `vani-symbolic` scoping section. Each phase needs its own
 confirm-before-starting, same discipline as this package itself.
 
-- **v0.2.0: Simplification** -- constant folding, identities (`x+0`,
-  `x*1`, `x*0`, `x-x`), canonical ordering of commutative `Add`/`Mul`
-  operands, like-term collection. Flagged as the highest-risk phase in
-  the whole symbolic tier -- a wrong rule silently poisons everything
-  built on top of it. Not started.
 - **v0.3.0: Symbolic differentiation** (`sym_diff`) -- sum/product/
   quotient/chain/power rules. Validated against `vani-calculus`'s
   `diff_central` at sample points. Not started.

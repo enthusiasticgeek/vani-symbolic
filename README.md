@@ -1,11 +1,12 @@
 # vani-symbolic
 
 Symbolic-math (CAS) foundation for the [vāṇी compiler](https://github.com/enthusiasticgeek/vani-compiler).
-Phase 1 of the planned symbolic tier in
+Phases 1-2 of the planned symbolic tier in
 [kosh-index/ROADMAP.md](https://github.com/enthusiasticgeek/kosh-index/blob/main/ROADMAP.md)
--- expression construction, numeric evaluation, and precedence-aware
-printing only. No simplification, differentiation, integration, or
-equation solving yet; those are later phases.
+-- expression construction, numeric evaluation, precedence-aware
+printing, and simplification (constant folding, identities, like-term
+collection). No differentiation, integration, or equation solving yet;
+those are later phases.
 
 `ExprNode` is a plain `Copy` struct (four `i64` fields, no heap-owning
 field) living in a flat `Vec<ExprNode>` arena, unlike the owned-`Vec`
@@ -31,15 +32,16 @@ vanic add symbolic
 vanic build
 ```
 
-## What's included (v0.1.0 — construction, evaluation, printing; see TODO.md)
+## What's included (v0.1.0-v0.2.0 — construction through simplification; see TODO.md)
 
 | Module | Functions |
 |---|---|
 | Construction | `sym_arena_new`, `symtab_new`, `sym_num`, `sym_var`, `symtab_intern`, `symtab_name_at`, `sym_add`, `sym_sub`, `sym_mul`, `sym_div`, `sym_pow`, `sym_neg` |
 | Introspection | `sym_kind`, `sym_is_leaf` |
-| Evaluation | `sym_eval` (nonnegative-integer `Pow` exponents only in v0.1.0) |
+| Evaluation | `sym_eval` (nonnegative-integer `Pow` exponents only) |
 | Printing | `sym_to_str` (precedence-aware, matches SymPy's `str()` spacing convention) |
 | Equality | `sym_eq_structural` (same-shape only, NOT commutative -- `1+2` and `2+1` are not equal here) |
+| Simplification | `sym_simplify` (constant folding, identities, and like-term collection for flat linear combinations of monomials -- see "Simplification scope" below; NOT general polynomial normal form) |
 
 ## Encoding
 
@@ -78,11 +80,41 @@ in the evaluation path.
 `Neg` is unary: uses `left` for its one child, `right` stays `-1` --
 arity is a pure function of `kind`, never stored per-node.
 
+## Simplification scope
+
+`sym_simplify(src, root, dst)` builds a simplified copy into a
+*separate* arena (never mutates `src` in place -- the arena only ever
+grows). Two layers:
+
+- **Constant folding + identities** for `Mul`/`Div`/`Pow`/`Neg`:
+  `Num op Num -> Num`, `x*1`/`1*x` -> `x`, `x*0`/`0*x` -> `0`, `x/1` ->
+  `x`, `x^1` -> `x`, `x^0` -> `1` (safe even at `x=0`), `Neg(Neg(x))`
+  -> `x`.
+- **Like-term collection** for `Add`/`Sub`, flattened across a chain of
+  nested `Add`/`Sub` nodes: collects `Num`, bare `Var`, and
+  `Mul(Num,Var)`/`Mul(Var,Num)` single-variable monomial terms by
+  `var_id` (`2x + 3x -> 5x`), folds constants through the same chain
+  (`2+3 -> 5`), and cancels to zero when terms fully cancel (`x-x ->
+  0`). Anything else in the chain (a product of two variables, a `Pow`,
+  a nested non-monomial `Mul`, ...) is kept as an opaque, unmerged term.
+
+**This is deliberately not general polynomial normal form** --
+multiplicative factor combination (`2*(3*x) -> 6*x`), `Mul`-chain
+flattening, and canonicalizing anything beyond the specific `Add`/`Sub`
+monomial case above are out of scope. Simplification also assumes
+well-defined inputs: since `sym_eval` is strict (both operands of a
+binary op are evaluated before combining), an identity like `0*x -> 0`
+changes *whether a trap occurs* if `x` itself would trap when
+evaluated -- correctness is validated at points where the *original*
+expression evaluates successfully, matching this ecosystem's existing
+assert-on-out-of-scope-input convention.
+
 ## What this library does NOT provide (yet)
 
-- **Simplification, differentiation, integration, equation solving.**
-  Later phases of the symbolic tier -- see kosh-index/ROADMAP.md's
-  `vani-symbolic` scoping breakdown for the full phased plan.
+- **Differentiation, integration, equation solving.** Later phases of
+  the symbolic tier -- see kosh-index/ROADMAP.md's `vani-symbolic`
+  scoping breakdown for the full phased plan.
+- **General polynomial normal form.** See "Simplification scope" above.
 - **`BigInt`-backed numbers.** `Num.value` is a plain `i64` in v0.1.0,
   matching this ecosystem's narrow-then-widen precedent. The design
   leaves room for a future `Vec<BigInt>` side table (parallel to
