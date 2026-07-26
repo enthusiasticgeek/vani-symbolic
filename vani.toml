@@ -8,7 +8,15 @@ description = "Symbolic-math (CAS) foundation for vāṇी: flat-arena expressi
 registry = "kosh"
 
 [deps]
-# No external deps -- v0.1.0 uses plain i64 literals, not vani-bignum's
-# BigInt, matching this ecosystem's narrow-then-widen precedent. The
-# design leaves room to switch Num nodes to a BigInt-backed side table
-# later without changing ExprNode's shape (see src/lib.vani header).
+# calculus: vendored via `vanic add calculus` for v0.3.0's tests/examples
+# ONLY -- production sym_diff has zero calculus:: calls. Its
+# diff_central is the numeric-differentiation reference tests/test_diff.vani
+# cross-checks sym_diff's symbolic output against, matching this
+# ecosystem's established pattern (e.g. vani-sparse vendors vani-matrix
+# purely for its own cross-check tests, not production code).
+#
+# Num nodes still use plain i64 literals, not vani-bignum's BigInt,
+# matching this ecosystem's narrow-then-widen precedent. The design
+# leaves room to switch to a BigInt-backed side table later without
+# changing ExprNode's shape (see src/lib.vani header).
+calculus = { path = "./vendor/calculus", version = "^0.3.0" }

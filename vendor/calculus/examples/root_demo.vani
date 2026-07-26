@@ -1,0 +1,34 @@
+// Root-finding demo: find √2 (root of x²−2) using bisect, secant, Newton,
+// and Brent's method, then compare accuracy and convergence.
+//
+// Run with:  vanic run examples/root_demo.vani
+
+use "../src/lib.vani";
+
+fn f_sqrt2(x: f64) -> f64 { return x * x - 2.0; }
+
+fn main() -> i64 {
+    let sqrt2_exact: f64 = 1.4142135623730950488;
+
+    let r_bisect: f64 = bisect(1.0, 2.0, f_sqrt2, 1.0e-12, 60);
+    print "bisect  root:", r_bisect;
+    print "        error:", abs(r_bisect - sqrt2_exact);
+
+    let r_secant: f64 = secant(1.0, 2.0, f_sqrt2, 1.0e-12, 30);
+    print "secant  root:", r_secant;
+    print "        error:", abs(r_secant - sqrt2_exact);
+
+    let r_newton: f64 = newton(1.5, f_sqrt2, 1.0e-12, 20);
+    print "newton  root:", r_newton;
+    print "        error:", abs(r_newton - sqrt2_exact);
+
+    let r_brent: f64 = brent(1.0, 2.0, f_sqrt2, 1.0e-12, 60);
+    print "brent   root:", r_brent;
+    print "        error:", abs(r_brent - sqrt2_exact);
+
+    // Verify: root² should equal 2.
+    print "";
+    print "brent root²:", r_brent * r_brent;
+
+    return 0;
+}

@@ -741,3 +741,107 @@ fn _sym_simplify_sum(src: ref Vec<ExprNode>, root: i64, dst: mut ref Vec<ExprNod
 
     return result;
 }
+
+// ── Differentiation (v0.3.0) ─────────────────────────────────────────────
+
+// Differentiates the subtree rooted at `root` with respect to `var_id`,
+// appending new derivative-combinator nodes to the SAME arena `root`
+// already lives in. Unlike sym_simplify's separate-dst design,
+// differentiation reuses existing node indices directly for any
+// subexpression that appears unchanged in the derivative (e.g. `v` in the
+// product rule's `u'*v + u*v'`) -- safe because the arena only ever grows
+// and a node index stays valid forever once returned. Raw output is
+// deliberately NOT simplified here: the v0.3.0 plan calls sym_simplify a
+// separate, composable pass (run it on the result to fold `1*x`, `x+0`,
+// `x^1`, etc. into something readable) rather than folding here too.
+//
+// One rule per node kind -- covers the full kind set (0-7), no kind is
+// left unhandled:
+//   Num          -> 0
+//   Var          -> 1 if this is var_id, else 0
+//   Add(u,v)     -> u' + v'
+//   Sub(u,v)     -> u' - v'
+//   Neg(u)       -> -u'
+//   Mul(u,v)     -> u'*v + u*v'                    (product rule)
+//   Div(u,v)     -> (u'*v - u*v') / (v*v)           (quotient rule)
+//   Pow(u,n)     -> n * u^(n-1) * u'                (power rule + chain rule)
+//     `n` (the exponent node) must be a literal Num -- a variable/
+//     expression exponent needs log-differentiation, out of scope (an
+//     extension of v0.1.0's existing "Pow: nonnegative integer exponent
+//     only" restriction). `n == 0` is a special case (u^(n-1) would need
+//     exponent -1, which sym_pow's own bounds don't support) -- handled
+//     directly since d(u^0)/dx = d(1)/dx = 0.
+//
+// Every local below has a rule-specific name suffix (_add/_sub/_neg/
+// _mul/_div/_pow), even across non-overlapping if-branches -- vāṇी's LLVM
+// backend has a known codegen bug where reusing one local name across
+// sibling branches of the same function can crash with "multiple
+// definition of local value" even though the branches never execute
+// together (see kosh-index ecosystem notes); giving every branch fully
+// distinct names sidesteps it entirely.
+//
+// NO #[wcet]: recursion depth is the tree depth, a runtime value.
+// WCET formula: ~50 * (number of nodes in the subtree rooted at `root`)
+// -- product/quotient rules each differentiate both children once, same
+// asymptotic shape as sym_eval/sym_simplify.
+fn sym_diff(arena: mut ref Vec<ExprNode>, root: i64, var_id: i64) -> i64 {
+    let node: ExprNode = arena[root];
+
+    if node.kind == 0 {
+        return sym_num(arena, 0);
+    }
+    if node.kind == 1 {
+        if node.value == var_id {
+            return sym_num(arena, 1);
+        }
+        return sym_num(arena, 0);
+    }
+    if node.kind == 2 {
+        let du_add: i64 = sym_diff(arena, node.left, var_id);
+        let dv_add: i64 = sym_diff(arena, node.right, var_id);
+        return sym_add(arena, du_add, dv_add);
+    }
+    if node.kind == 3 {
+        let du_sub: i64 = sym_diff(arena, node.left, var_id);
+        let dv_sub: i64 = sym_diff(arena, node.right, var_id);
+        return sym_sub(arena, du_sub, dv_sub);
+    }
+    if node.kind == 7 {
+        let du_neg: i64 = sym_diff(arena, node.left, var_id);
+        return sym_neg(arena, du_neg);
+    }
+    if node.kind == 4 {
+        let u_mul: i64 = node.left;
+        let v_mul: i64 = node.right;
+        let du_mul: i64 = sym_diff(arena, u_mul, var_id);
+        let dv_mul: i64 = sym_diff(arena, v_mul, var_id);
+        let term1_mul: i64 = sym_mul(arena, du_mul, v_mul);
+        let term2_mul: i64 = sym_mul(arena, u_mul, dv_mul);
+        return sym_add(arena, term1_mul, term2_mul);
+    }
+    if node.kind == 5 {
+        let u_div: i64 = node.left;
+        let v_div: i64 = node.right;
+        let du_div: i64 = sym_diff(arena, u_div, var_id);
+        let dv_div: i64 = sym_diff(arena, v_div, var_id);
+        let term1_div: i64 = sym_mul(arena, du_div, v_div);
+        let term2_div: i64 = sym_mul(arena, u_div, dv_div);
+        let numerator_div: i64 = sym_sub(arena, term1_div, term2_div);
+        let denominator_div: i64 = sym_mul(arena, v_div, v_div);
+        return sym_div(arena, numerator_div, denominator_div);
+    }
+    // kind == 6: Pow.
+    let u_pow: i64 = node.left;
+    let exp_node_pow: ExprNode = arena[node.right];
+    assert exp_node_pow.kind == 0;
+    let n_pow: i64 = exp_node_pow.value;
+    assert n_pow >= 0;
+    if n_pow == 0 {
+        return sym_num(arena, 0);
+    }
+    let du_pow: i64 = sym_diff(arena, u_pow, var_id);
+    let n_minus_1_pow: i64 = sym_num(arena, n_pow - 1);
+    let powed_pow: i64 = sym_pow(arena, u_pow, n_minus_1_pow);
+    let coeff_pow: i64 = sym_mul(arena, sym_num(arena, n_pow), powed_pow);
+    return sym_mul(arena, coeff_pow, du_pow);
+}

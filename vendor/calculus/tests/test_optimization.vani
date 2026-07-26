@@ -1,0 +1,65 @@
+use "../src/lib.vani";
+
+fn quad(x: f64) -> f64 { let u: f64 = x - 2.0; return u * u; }
+fn quartic(x: f64) -> f64 { let u: f64 = x - 2.0; return u * u * u * u + u * u; }
+fn cos_fn(x: f64) -> f64 { return cos(x); }
+
+// golden_section: (x-2)^2 on [0,4] — min at x=2.
+#[test]
+fn test_golden_section_quadratic() -> i64 {
+    let xm: f64 = golden_section(0.0, 4.0, quad, 1.0e-12, 100);
+    assert abs(xm - 2.0) < 1.0e-8;
+    return 0;
+}
+
+// golden_section: cos(x) on [2,5] — min at x=π.
+#[test]
+fn test_golden_section_cos() -> i64 {
+    let pi: f64 = 3.141592653589793;
+    let xm: f64 = golden_section(2.0, 5.0, cos_fn, 1.0e-12, 100);
+    assert abs(xm - pi) < 1.0e-6;
+    return 0;
+}
+
+// brent_min: (x-2)^2 on [0,4] — min at x=2.
+#[test]
+fn test_brent_min_quadratic() -> i64 {
+    let xm: f64 = brent_min(0.0, 4.0, quad, 1.0e-12, 100);
+    assert abs(xm - 2.0) < 1.0e-10;
+    return 0;
+}
+
+// brent_min: (x-2)^4+(x-2)^2 on [0,4] — min at x=2.
+#[test]
+fn test_brent_min_quartic() -> i64 {
+    let xm: f64 = brent_min(0.0, 4.0, quartic, 1.0e-12, 100);
+    assert abs(xm - 2.0) < 1.0e-8;
+    return 0;
+}
+
+// brent_min: cos(x) on [2,5] — min at x=π ≈ 3.14159.
+#[test]
+fn test_brent_min_cos() -> i64 {
+    let pi: f64 = 3.141592653589793;
+    let xm: f64 = brent_min(2.0, 5.0, cos_fn, 1.0e-12, 100);
+    assert abs(xm - pi) < 1.0e-8;
+    return 0;
+}
+
+// newton_min: (x-2)^2 starting at x=0 — Newton step is exact; converges in 1 iteration.
+#[test]
+fn test_newton_min_quadratic() -> i64 {
+    let xm: f64 = newton_min(0.0, quad, 1.0e-12, 50);
+    assert abs(xm - 2.0) < 1.0e-8;
+    return 0;
+}
+
+// newton_min: (x-2)^4+(x-2)^2 starting at x=3 — converges to x=2.
+#[test]
+fn test_newton_min_quartic() -> i64 {
+    let xm: f64 = newton_min(3.0, quartic, 1.0e-12, 50);
+    assert abs(xm - 2.0) < 1.0e-8;
+    return 0;
+}
+
+fn main() -> i64 { return 0; }

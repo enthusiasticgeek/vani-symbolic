@@ -1,0 +1,80 @@
+use "../src/lib.vani";
+
+// poly_eval: p(x) = 1 + 2x + 3x²  →  p(2)=17, p(0)=1.
+#[test]
+fn test_poly_eval_at_2() -> i64 {
+    let coeffs: Vec<f64> = vec(1.0);
+    push(mut ref coeffs, 2.0);
+    push(mut ref coeffs, 3.0);
+    assert abs(poly_eval(coeffs, 2.0) - 17.0) < 1.0e-12;
+    return 0;
+}
+
+#[test]
+fn test_poly_eval_at_0() -> i64 {
+    let coeffs: Vec<f64> = vec(5.0);
+    push(mut ref coeffs, 7.0);
+    push(mut ref coeffs, 11.0);
+    assert abs(poly_eval(coeffs, 0.0) - 5.0) < 1.0e-12;
+    return 0;
+}
+
+// poly_deriv_coeffs: d/dx(1 + 2x + 3x²) = 2 + 6x  →  [2, 6].
+#[test]
+fn test_poly_deriv_coeffs() -> i64 {
+    let coeffs: Vec<f64> = vec(1.0);
+    push(mut ref coeffs, 2.0);
+    push(mut ref coeffs, 3.0);
+    let dc: Vec<f64> = poly_deriv_coeffs(coeffs);
+    assert len(ref dc) as i64 == 2;
+    assert abs(dc[0] - 2.0) < 1.0e-12;
+    assert abs(dc[1] - 6.0) < 1.0e-12;
+    return 0;
+}
+
+// poly_add: [1,2,3] + [4,5] = [5,7,3].
+#[test]
+fn test_poly_add() -> i64 {
+    let a: Vec<f64> = vec(1.0);
+    push(mut ref a, 2.0);
+    push(mut ref a, 3.0);
+    let b: Vec<f64> = vec(4.0);
+    push(mut ref b, 5.0);
+    let c: Vec<f64> = poly_add(a, b);
+    assert abs(c[0] - 5.0) < 1.0e-12;
+    assert abs(c[1] - 7.0) < 1.0e-12;
+    assert abs(c[2] - 3.0) < 1.0e-12;
+    return 0;
+}
+
+// poly_mul: (1+x)*(1+x) = 1 + 2x + x²  →  [1,2,1].
+#[test]
+fn test_poly_mul_linear_sq() -> i64 {
+    let a: Vec<f64> = vec(1.0);
+    push(mut ref a, 1.0);
+    let b: Vec<f64> = vec(1.0);
+    push(mut ref b, 1.0);
+    let c: Vec<f64> = poly_mul(a, b);
+    assert abs(c[0] - 1.0) < 1.0e-12;
+    assert abs(c[1] - 2.0) < 1.0e-12;
+    assert abs(c[2] - 1.0) < 1.0e-12;
+    return 0;
+}
+
+// Round-trip: poly_add(p, poly_deriv_coeffs(p)) evaluated at x=1.
+// p = 1 + 2x + 3x² → p' = 2 + 6x → p+p' = 3 + 8x + 3x² → at x=1: 14.
+#[test]
+fn test_poly_add_deriv_roundtrip() -> i64 {
+    let p: Vec<f64> = vec(1.0);
+    push(mut ref p, 2.0);
+    push(mut ref p, 3.0);
+    let dp: Vec<f64> = poly_deriv_coeffs(p);
+    let p2: Vec<f64> = vec(1.0);
+    push(mut ref p2, 2.0);
+    push(mut ref p2, 3.0);
+    let total: Vec<f64> = poly_add(p2, dp);
+    assert abs(poly_eval(total, 1.0) - 14.0) < 1.0e-12;
+    return 0;
+}
+
+fn main() -> i64 { return 0; }

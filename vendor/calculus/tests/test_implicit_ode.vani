@@ -1,0 +1,74 @@
+use "../src/lib.vani";
+
+fn mild_decay(t: f64, y: f64) -> f64 { return (0.0 - 2.0) * y; }
+fn stiff_decay(t: f64, y: f64) -> f64 { return (0.0 - 50.0) * y; }
+
+fn make_ts(n: i64, t_end: f64) -> Vec<f64> {
+    let ts: Vec<f64> = vec(0.0);
+    let i: i64 = 1;
+    while i < n {
+        push(mut ref ts, t_end * (i as f64) / ((n - 1) as f64));
+        i = i + 1;
+    }
+    return ts;
+}
+
+// backward_euler_step on dy/dt=-2y should match the exact algebraic
+// solution of the implicit equation: y_next = y_curr / (1 + 2h).
+#[test]
+fn test_backward_euler_step_matches_algebraic_solution() -> i64 {
+    let y_next: f64 = backward_euler_step(0.1, 1.0, 0.1, mild_decay, 1.0e-12, 30);
+    let expected: f64 = 1.0 / (1.0 + 2.0 * 0.1);
+    assert abs(y_next - expected) < 1.0e-8;
+    return 0;
+}
+
+// backward_euler_solve on dy/dt=-2y, y(0)=1, over [0,1], 11 points (h=0.1).
+// First-order method: O(h) error is expected at this coarse step.
+#[test]
+fn test_backward_euler_solve_decay() -> i64 {
+    let ts: Vec<f64> = make_ts(11, 1.0);
+    let ys: Vec<f64> = backward_euler_solve(1.0, ref ts, mild_decay, 1.0e-10, 30);
+    let n: i64 = len(ref ys) as i64;
+    let exact: f64 = exp(0.0 - 2.0);
+    assert abs(ys[n - 1] - exact) < 0.05;
+    return 0;
+}
+
+// crank_nicolson_solve on the same problem: second-order, should be
+// noticeably more accurate than backward Euler at the same step size.
+#[test]
+fn test_crank_nicolson_solve_decay() -> i64 {
+    let ts: Vec<f64> = make_ts(11, 1.0);
+    let ys_be: Vec<f64> = backward_euler_solve(1.0, ref ts, mild_decay, 1.0e-10, 30);
+    let ys_cn: Vec<f64> = crank_nicolson_solve(1.0, ref ts, mild_decay, 1.0e-10, 30);
+    let n: i64 = len(ref ys_cn) as i64;
+    let exact: f64 = exp(0.0 - 2.0);
+    let err_be: f64 = abs(ys_be[n - 1] - exact);
+    let err_cn: f64 = abs(ys_cn[n - 1] - exact);
+    assert err_cn < 1.0e-3;
+    assert err_cn < err_be;
+    return 0;
+}
+
+// Stability demonstration: on a stiff ODE (dy/dt=-50y) with h=0.1,
+// explicit Euler diverges (|y| grows without bound) but backward Euler
+// stays bounded and close to the true decaying solution -- the entire
+// reason these solvers exist. This composes euler_solve (already in this
+// file) with the new backward_euler_solve rather than testing either in
+// isolation.
+#[test]
+fn test_backward_euler_stable_where_explicit_diverges() -> i64 {
+    let ts: Vec<f64> = make_ts(6, 0.5);
+    let ys_explicit: Vec<f64> = euler_solve(1.0, ref ts, stiff_decay);
+    let n: i64 = len(ref ys_explicit) as i64;
+    assert abs(ys_explicit[n - 1]) > 100.0;
+
+    let ys_implicit: Vec<f64> = backward_euler_solve(1.0, ref ts, stiff_decay, 1.0e-10, 50);
+    let exact: f64 = exp(0.0 - 25.0);
+    assert abs(ys_implicit[n - 1]) < 1.0;
+    assert abs(ys_implicit[n - 1] - exact) < 1.0e-2;
+    return 0;
+}
+
+fn main() -> i64 { return 0; }

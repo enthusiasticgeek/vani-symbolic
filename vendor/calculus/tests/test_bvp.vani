@@ -1,0 +1,46 @@
+use "../src/lib.vani";
+
+// y'' = -y (simple harmonic). With y(0)=0, y(pi/2)=1, the exact solution
+// is y(t) = sin(t) -- lets every point of the shooting method's returned
+// trajectory be checked, not just the endpoint.
+fn shm(t: f64, y: f64, v: f64) -> f64 { return 0.0 - y; }
+
+#[test]
+fn test_bvp_rk4_step_shm() -> i64 {
+    // At t=0, y=0, v=1 (matches y=sin(t), y'=cos(t) at t=0): one RK4 step
+    // of h=0.01 should land very close to (sin(0.01), cos(0.01)).
+    let step: Vec<f64> = bvp_rk4_step(0.0, 0.0, 1.0, 0.01, shm);
+    assert abs(step[0] - sin(0.01)) < 1.0e-9;
+    assert abs(step[1] - cos(0.01)) < 1.0e-9;
+    return 0;
+}
+
+#[test]
+fn test_bvp_shoot_integrate_endpoint() -> i64 {
+    let pi: f64 = f64_pi();
+    // Starting with the correct slope y'(0)=1 should land on y(pi/2)=1
+    // (since y=sin(t), y'(0)=cos(0)=1).
+    let end: Vec<f64> = bvp_shoot_integrate(0.0, 0.0, 1.0, pi / 2.0, 50, shm);
+    assert abs(end[0] - 1.0) < 1.0e-6;
+    return 0;
+}
+
+#[test]
+fn test_bvp_shoot_solve_matches_sine_everywhere() -> i64 {
+    let pi: f64 = f64_pi();
+    // Deliberately wrong initial slope guesses (0.5, 1.5) -- the secant
+    // search must find the correct slope (1.0) on its own.
+    let traj: Vec<f64> = bvp_shoot_solve(0.0, pi / 2.0, 0.0, 1.0, shm, 0.5, 1.5, 50, 1.0e-10, 30);
+    let n: i64 = len(ref traj) as i64;
+    assert n == 51;
+    let h: f64 = (pi / 2.0) / 50.0;
+    let i: i64 = 0;
+    while i < n {
+        let t: f64 = (i as f64) * h;
+        assert abs(traj[i] - sin(t)) < 1.0e-6;
+        i = i + 1;
+    }
+    return 0;
+}
+
+fn main() -> i64 { return 0; }

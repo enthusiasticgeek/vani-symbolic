@@ -1,0 +1,96 @@
+use "../src/lib.vani";
+
+// Lagrange: through (0,0),(1,1),(2,4) [i.e. x²] — exact at interior point x=1.5.
+#[test]
+fn test_lagrange_x_sq() -> i64 {
+    let xs: Vec<f64> = vec(0.0);
+    push(mut ref xs, 1.0);
+    push(mut ref xs, 2.0);
+    let ys: Vec<f64> = vec(0.0);
+    push(mut ref ys, 1.0);
+    push(mut ref ys, 4.0);
+    let result: f64 = lagrange_interp(ref xs, ref ys, 1.5);
+    assert abs(result - 2.25) < 1.0e-12;
+    return 0;
+}
+
+// Lagrange through a constant function: y=7 → interpolated value = 7 everywhere.
+#[test]
+fn test_lagrange_constant() -> i64 {
+    let xs: Vec<f64> = vec(0.0);
+    push(mut ref xs, 1.0);
+    push(mut ref xs, 3.0);
+    let ys: Vec<f64> = vec(7.0);
+    push(mut ref ys, 7.0);
+    push(mut ref ys, 7.0);
+    let result: f64 = lagrange_interp(ref xs, ref ys, 2.0);
+    assert abs(result - 7.0) < 1.0e-12;
+    return 0;
+}
+
+// linear_interp_table: midpoint between adjacent entries.
+// At x=1.5 between (1,10) and (2,40): lerp(10,40,0.5) = 25.
+#[test]
+fn test_linear_interp_midpoint() -> i64 {
+    let xs: Vec<f64> = vec(0.0);
+    push(mut ref xs, 1.0);
+    push(mut ref xs, 2.0);
+    push(mut ref xs, 3.0);
+    let ys: Vec<f64> = vec(0.0);
+    push(mut ref ys, 10.0);
+    push(mut ref ys, 40.0);
+    push(mut ref ys, 90.0);
+    let result: f64 = linear_interp_table(ref xs, ref ys, 1.5);
+    assert abs(result - 25.0) < 1.0e-12;
+    return 0;
+}
+
+// linear_interp_table: clamps at endpoints.
+#[test]
+fn test_linear_interp_clamp() -> i64 {
+    let xs: Vec<f64> = vec(1.0);
+    push(mut ref xs, 2.0);
+    let ys: Vec<f64> = vec(5.0);
+    push(mut ref ys, 10.0);
+    assert abs(linear_interp_table(ref xs, ref ys, 0.0) - 5.0) < 1.0e-12;
+    assert abs(linear_interp_table(ref xs, ref ys, 5.0) - 10.0) < 1.0e-12;
+    return 0;
+}
+
+// cubic_spline through a linear function y=3x: spline is exact.
+#[test]
+fn test_cubic_spline_linear() -> i64 {
+    let xs: Vec<f64> = vec(0.0);
+    push(mut ref xs, 1.0);
+    push(mut ref xs, 2.0);
+    push(mut ref xs, 3.0);
+    let ys: Vec<f64> = vec(0.0);
+    push(mut ref ys, 3.0);
+    push(mut ref ys, 6.0);
+    push(mut ref ys, 9.0);
+    let M: Vec<f64> = cubic_spline_natural(ref xs, ref ys);
+    let result: f64 = cubic_spline_eval(ref xs, ref ys, ref M, 1.5);
+    assert abs(result - 4.5) < 1.0e-10;
+    return 0;
+}
+
+// cubic_spline through x²: 5 uniform nodes. Spline approximates x² closely.
+#[test]
+fn test_cubic_spline_x_sq() -> i64 {
+    let xs: Vec<f64> = vec(0.0);
+    push(mut ref xs, 1.0);
+    push(mut ref xs, 2.0);
+    push(mut ref xs, 3.0);
+    push(mut ref xs, 4.0);
+    let ys: Vec<f64> = vec(0.0);
+    push(mut ref ys, 1.0);
+    push(mut ref ys, 4.0);
+    push(mut ref ys, 9.0);
+    push(mut ref ys, 16.0);
+    let M: Vec<f64> = cubic_spline_natural(ref xs, ref ys);
+    let result: f64 = cubic_spline_eval(ref xs, ref ys, ref M, 2.5);
+    assert abs(result - 6.25) < 5.0e-2;
+    return 0;
+}
+
+fn main() -> i64 { return 0; }

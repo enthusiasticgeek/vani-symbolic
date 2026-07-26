@@ -1,0 +1,46 @@
+// Spline interpolation demo: fit a natural cubic spline to cos(x) samples
+// and evaluate it at finer points to verify accuracy.
+//
+// Run with:  vanic run examples/spline_demo.vani
+
+use "../src/lib.vani";
+
+fn main() -> i64 {
+    // 7 uniform nodes over [0, π/2].
+    let pi: f64 = 3.141592653589793;
+    let half_pi: f64 = pi / 2.0;
+    let n_nodes: i64 = 7;
+    let xs: Vec<f64> = vec(0.0);
+    let ys: Vec<f64> = vec(cos(0.0));
+    let i: i64 = 1;
+    while i < n_nodes {
+        let x: f64 = half_pi * (i as f64) / ((n_nodes - 1) as f64);
+        push(mut ref xs, x);
+        push(mut ref ys, cos(x));
+        i = i + 1;
+    }
+
+    // Compute spline coefficients.
+    let M: Vec<f64> = cubic_spline_natural(ref xs, ref ys);
+
+    print "x          spline       cos(x)       error";
+
+    // Evaluate at 9 test points (including between nodes).
+    let j: i64 = 0;
+    while j < 9 {
+        let xq: f64 = half_pi * (j as f64) / 8.0;
+        let s: f64 = cubic_spline_eval(ref xs, ref ys, ref M, xq);
+        let exact: f64 = cos(xq);
+        print xq, s, exact, abs(s - exact);
+        j = j + 1;
+    }
+
+    // Also demonstrate linear interpolation on the same nodes for comparison.
+    print "";
+    print "Linear interpolation at x = 0.4:";
+    let lin: f64 = linear_interp_table(ref xs, ref ys, 0.4);
+    print "linear:", lin, "  exact:", cos(0.4), "  error:", abs(lin - cos(0.4));
+    print "spline:", cubic_spline_eval(ref xs, ref ys, ref M, 0.4), "  exact:", cos(0.4);
+
+    return 0;
+}

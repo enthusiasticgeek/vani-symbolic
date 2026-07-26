@@ -1,0 +1,217 @@
+// Tests for sym_diff: one rule per node kind (sum/sub/neg/product/
+// quotient/power+chain), exact-structure checks confirming the arena-
+// reuse design (derivative nodes reference the ORIGINAL subexpression
+// index directly, never a copy), evaluation-based checks against
+// hand-derived closed-form derivatives, and a genuine cross-package
+// check against vani-calculus's diff_central (symbolic derivative,
+// evaluated at a point, compared to the numeric central-difference
+// derivative at the same point).
+// Run with:  vanic test tests/test_diff.vani
+
+use "../src/lib.vani";
+use "../vendor/calculus/src/lib.vani";
+
+fn close(a: f64, b: f64) -> bool {
+    return abs(a - b) < 1.0e-4;
+}
+
+fn main() -> i64 {
+    // ---- Exact structure: one case per node kind ----
+
+    // d(5)/dx = 0.
+    let a1: Vec<ExprNode> = sym_arena_new();
+    let t1: SymbolTable = symtab_new();
+    let vid_x1: i64 = symtab_intern(mut ref t1, "x");
+    let five: i64 = sym_num(mut ref a1, 5);
+    let d_five: i64 = sym_diff(mut ref a1, five, vid_x1);
+    assert a1[d_five].kind == 0 && a1[d_five].value == 0;
+
+    // d(x)/dx = 1, d(y)/dx = 0 (Var not matching the diff variable).
+    let x1: i64 = sym_var(mut ref a1, mut ref t1, "x");
+    let y1: i64 = sym_var(mut ref a1, mut ref t1, "y");
+    let d_x1: i64 = sym_diff(mut ref a1, x1, vid_x1);
+    assert a1[d_x1].kind == 0 && a1[d_x1].value == 1;
+    let d_y1: i64 = sym_diff(mut ref a1, y1, vid_x1);
+    assert a1[d_y1].kind == 0 && a1[d_y1].value == 0;
+
+    // d(x+y)/dx = 1 + 0 (sum rule, raw/unsimplified).
+    let sum1: i64 = sym_add(mut ref a1, x1, y1);
+    let d_sum1: i64 = sym_diff(mut ref a1, sum1, vid_x1);
+    assert a1[d_sum1].kind == 2;
+    assert a1[a1[d_sum1].left].kind == 0 && a1[a1[d_sum1].left].value == 1;
+    assert a1[a1[d_sum1].right].kind == 0 && a1[a1[d_sum1].right].value == 0;
+
+    // d(x-y)/dx = 1 - 0 (difference rule).
+    let sub1: i64 = sym_sub(mut ref a1, x1, y1);
+    let d_sub1: i64 = sym_diff(mut ref a1, sub1, vid_x1);
+    assert a1[d_sub1].kind == 3;
+    assert a1[a1[d_sub1].left].kind == 0 && a1[a1[d_sub1].left].value == 1;
+    assert a1[a1[d_sub1].right].kind == 0 && a1[a1[d_sub1].right].value == 0;
+
+    // d(-x)/dx = -1.
+    let neg1: i64 = sym_neg(mut ref a1, x1);
+    let d_neg1: i64 = sym_diff(mut ref a1, neg1, vid_x1);
+    assert a1[d_neg1].kind == 7;
+    assert a1[a1[d_neg1].left].kind == 0 && a1[a1[d_neg1].left].value == 1;
+
+    // d(x*y)/dx = (1*y) + (x*0) -- product rule. The `y` and `x` operands
+    // of the rebuilt Muls must be the SAME arena index as the ORIGINAL x1/
+    // y1 nodes (not copies) -- differentiation reuses subexpressions
+    // directly, unlike sym_simplify's separate-dst copy design.
+    let mul1: i64 = sym_mul(mut ref a1, x1, y1);
+    let d_mul1: i64 = sym_diff(mut ref a1, mul1, vid_x1);
+    assert a1[d_mul1].kind == 2;
+    let mul1_t1: i64 = a1[d_mul1].left;
+    let mul1_t2: i64 = a1[d_mul1].right;
+    assert a1[mul1_t1].kind == 4;
+    assert a1[a1[mul1_t1].left].kind == 0 && a1[a1[mul1_t1].left].value == 1;
+    assert a1[mul1_t1].right == y1; // reused index, not a copy
+    assert a1[mul1_t2].kind == 4;
+    assert a1[mul1_t2].left == x1; // reused index, not a copy
+    assert a1[a1[mul1_t2].right].kind == 0 && a1[a1[mul1_t2].right].value == 0;
+
+    // d(x/y)/dx = ((1*y) - (x*0)) / (y*y) -- quotient rule.
+    let div1: i64 = sym_div(mut ref a1, x1, y1);
+    let d_div1: i64 = sym_diff(mut ref a1, div1, vid_x1);
+    assert a1[d_div1].kind == 5;
+    let div1_num: i64 = a1[d_div1].left;
+    let div1_den: i64 = a1[d_div1].right;
+    assert a1[div1_num].kind == 3;
+    assert a1[div1_den].kind == 4;
+    assert a1[div1_den].left == y1 && a1[div1_den].right == y1;
+
+    // d(x^3)/dx = (3 * x^2) * 1 -- power rule (chain rule's `du` term is
+    // trivially 1 here since the base is a bare Var).
+    let three1: i64 = sym_num(mut ref a1, 3);
+    let pow1: i64 = sym_pow(mut ref a1, x1, three1);
+    let d_pow1: i64 = sym_diff(mut ref a1, pow1, vid_x1);
+    assert a1[d_pow1].kind == 4;
+    let pow1_coeff: i64 = a1[d_pow1].left;
+    let pow1_du: i64 = a1[d_pow1].right;
+    assert a1[pow1_coeff].kind == 4;
+    assert a1[a1[pow1_coeff].left].kind == 0 && a1[a1[pow1_coeff].left].value == 3;
+    let pow1_inner: i64 = a1[pow1_coeff].right;
+    assert a1[pow1_inner].kind == 6;
+    assert a1[pow1_inner].left == x1; // base reused, not copied
+    assert a1[a1[pow1_inner].right].kind == 0 && a1[a1[pow1_inner].right].value == 2;
+    assert a1[pow1_du].kind == 0 && a1[pow1_du].value == 1;
+
+    // d(x^0)/dx = 0 -- the n==0 special case (u^(n-1) would need
+    // exponent -1, which sym_pow doesn't support).
+    let zero1: i64 = sym_num(mut ref a1, 0);
+    let pow0: i64 = sym_pow(mut ref a1, x1, zero1);
+    let d_pow0: i64 = sym_diff(mut ref a1, pow0, vid_x1);
+    assert a1[d_pow0].kind == 0 && a1[d_pow0].value == 0;
+
+    // ---- Evaluation: dp/dx for p(x) = x^3 - 3x^2 + x - 5 ----
+    // dp/dx = 3x^2 - 6x + 1, checked at several integer points against a
+    // hand-derived closed form.
+    let a2: Vec<ExprNode> = sym_arena_new();
+    let t2: SymbolTable = symtab_new();
+    let x2: i64 = sym_var(mut ref a2, mut ref t2, "x");
+    let vid_x2: i64 = symtab_intern(mut ref t2, "x");
+    let p_pow3: i64 = sym_pow(mut ref a2, x2, sym_num(mut ref a2, 3));
+    let p_pow2: i64 = sym_pow(mut ref a2, x2, sym_num(mut ref a2, 2));
+    let p_3x2: i64 = sym_mul(mut ref a2, sym_num(mut ref a2, 3), p_pow2);
+    let p_step1: i64 = sym_sub(mut ref a2, p_pow3, p_3x2);
+    let p_step2: i64 = sym_add(mut ref a2, p_step1, x2);
+    let p_root: i64 = sym_sub(mut ref a2, p_step2, sym_num(mut ref a2, 5));
+    let dp_root: i64 = sym_diff(mut ref a2, p_root, vid_x2);
+
+    let sample_i: i64 = 0 - 3;
+    while sample_i <= 3 {
+        let vals: Vec<i64> = vec(sample_i);
+        let expected: i64 = 3 * sample_i * sample_i - 6 * sample_i + 1;
+        assert sym_eval(ref a2, dp_root, ref vals) == expected;
+        sample_i = sample_i + 1;
+    }
+
+    // Composed with sym_simplify: the raw derivative should still
+    // evaluate identically after being cleaned up (the v0.3.0 plan's
+    // "raw output needs the simplifier to stay readable" note).
+    let dsimp_dst: Vec<ExprNode> = sym_arena_new();
+    let dp_simplified: i64 = sym_simplify(ref a2, dp_root, mut ref dsimp_dst);
+    let check_vals: Vec<i64> = vec(4);
+    assert sym_eval(ref a2, dp_root, ref check_vals) == sym_eval(ref dsimp_dst, dp_simplified, ref check_vals);
+
+    // ---- Multivariable: f(x,y) = x*y + y^2, df/dx = y ----
+    let a3: Vec<ExprNode> = sym_arena_new();
+    let t3: SymbolTable = symtab_new();
+    let x3: i64 = sym_var(mut ref a3, mut ref t3, "x");
+    let y3: i64 = sym_var(mut ref a3, mut ref t3, "y");
+    let vid_x3: i64 = symtab_intern(mut ref t3, "x");
+    let f_xy: i64 = sym_mul(mut ref a3, x3, y3);
+    let f_ysq: i64 = sym_pow(mut ref a3, y3, sym_num(mut ref a3, 2));
+    let f_root: i64 = sym_add(mut ref a3, f_xy, f_ysq);
+    let df_dx: i64 = sym_diff(mut ref a3, f_root, vid_x3);
+
+    let mv_i: i64 = 0 - 2;
+    while mv_i <= 2 {
+        let mv_j: i64 = 0 - 2;
+        while mv_j <= 2 {
+            let mv_vals: Vec<i64> = vec(mv_i, mv_j);
+            assert sym_eval(ref a3, df_dx, ref mv_vals) == mv_j;
+            mv_j = mv_j + 1;
+        }
+        mv_i = mv_i + 1;
+    }
+
+    // ---- Cross-check against vani-calculus's diff_central ----
+    // p(x) = x^3 - 3x^2 + x - 5, evaluated symbolically (integer sample
+    // points, via sym_eval) vs. numerically (diff_central on a native f64
+    // closure at the same point). h small enough that central-difference
+    // truncation error (O(h^2), proportional to p'''(x)=6 here) stays
+    // far under `close`'s tolerance.
+    let h: f64 = 1.0e-4;
+    let cross_i: i64 = 0 - 3;
+    while cross_i <= 3 {
+        let x0: f64 = cross_i as f64;
+        let native_lo: f64 = poly_native(x0 - h);
+        let native_hi: f64 = poly_native(x0 + h);
+        let numeric_deriv: f64 = calculus::diff_central(native_lo, native_hi, h);
+        let vals2: Vec<i64> = vec(cross_i);
+        let symbolic_deriv: f64 = (sym_eval(ref a2, dp_root, ref vals2)) as f64;
+        assert close(numeric_deriv, symbolic_deriv);
+        cross_i = cross_i + 1;
+    }
+
+    // Chain rule specifically: q(x) = (x+1)^3, dq/dx = 3*(x+1)^2.
+    let a4: Vec<ExprNode> = sym_arena_new();
+    let t4: SymbolTable = symtab_new();
+    let x4: i64 = sym_var(mut ref a4, mut ref t4, "x");
+    let vid_x4: i64 = symtab_intern(mut ref t4, "x");
+    let q_inner: i64 = sym_add(mut ref a4, x4, sym_num(mut ref a4, 1));
+    let q_root: i64 = sym_pow(mut ref a4, q_inner, sym_num(mut ref a4, 3));
+    let dq_root: i64 = sym_diff(mut ref a4, q_root, vid_x4);
+
+    let chain_i: i64 = 0 - 3;
+    while chain_i <= 3 {
+        let cx0: f64 = chain_i as f64;
+        let cnative_lo: f64 = chain_native(cx0 - h);
+        let cnative_hi: f64 = chain_native(cx0 + h);
+        let cnumeric_deriv: f64 = calculus::diff_central(cnative_lo, cnative_hi, h);
+        let cvals: Vec<i64> = vec(chain_i);
+        let csymbolic_deriv: f64 = (sym_eval(ref a4, dq_root, ref cvals)) as f64;
+        assert close(cnumeric_deriv, csymbolic_deriv);
+        chain_i = chain_i + 1;
+    }
+
+    print "diff ok";
+    return 0;
+}
+
+// Native f64 mirror of tests/test_diff.vani's p(x) = x^3 - 3x^2 + x - 5,
+// for cross-checking sym_diff's symbolic derivative against
+// vani-calculus's diff_central numeric derivative at the same points.
+// Deliberately not named `f`/`g` -- those collide with fn-typed parameter
+// names used inside vendored vani-calculus (see kosh-index ecosystem
+// notes on global-name shadowing of local fn-pointer params).
+fn poly_native(x: f64) -> f64 {
+    return x * x * x - 3.0 * x * x + x - 5.0;
+}
+
+// Native f64 mirror of q(x) = (x+1)^3, for the chain-rule cross-check.
+fn chain_native(x: f64) -> f64 {
+    let t: f64 = x + 1.0;
+    return t * t * t;
+}

@@ -1,0 +1,13 @@
+[package]
+name    = "calculus"
+version = "0.3.0"
+entry   = "src/lib.vani"
+authors = "enthusiasticgeek"
+license = "MIT"
+description = "Numerical calculus for vāṇī: integration, differentiation, root-finding, ODE solvers, interpolation, and polynomial arithmetic."
+registry = "kosh"
+
+[deps]
+# No external deps — all primitive math (sin, cos, exp, log, sqrt, pow, erf,
+# tgamma, factorial, binomial, gcd, lcm …) is provided by the vāṇī compiler
+# builtins and must NOT be reimplemented here.

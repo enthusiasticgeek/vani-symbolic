@@ -1,0 +1,1094 @@
+// vani-calculus  v0.3.0 — numerical calculus library
+//
+// IMPORTANT — do NOT reimplement vāṇī compiler builtins.
+// The following are already available as builtins and must be called
+// directly in implementation code, never redeclared here:
+//   sin, cos, tan, asin, acos, atan, atan2, sinh, cosh, tanh
+//   exp, log, log2, log10, pow, sqrt, abs, floor, ceil
+//   f64_erf, f64_erfc, f64_tgamma, f64_lgamma, f64_cbrt, f64_hypot
+//   f64_fma, f64_lerp, f64_inv_lerp, f64_clamp, f64_quadratic_root
+//   i64_factorial, i64_binomial, i64_perm, i64_gcd, i64_lcm
+//   i64_is_prime, i64_fibonacci, f64_geometric_mean, f64_harmonic_mean
+
+// ── Integration ──────────────────────────────────────────────────────────────
+
+// WCET = n × 20 cycles (n ≤ 1024).
+#[bounded_stack(bytes = 136)]
+fn integrate_trapz(a: f64, b: f64, ys: ref Vec<f64>) -> f64 {
+    let n: i64 = len(ys) as i64;
+    if n < 2 {
+        return 0.0;
+    }
+    let h: f64 = (b - a) / ((n - 1) as f64);
+    let sum: f64 = ys[0] / 2.0 + ys[n - 1] / 2.0;
+    let i: i64 = 1;
+    while i < n - 1 {
+        sum = sum + ys[i];
+        i = i + 1;
+    }
+    return h * sum;
+}
+
+// WCET = n × 25 cycles (n ≤ 1024).
+#[bounded_stack(bytes = 136)]
+fn integrate_simpson(a: f64, b: f64, ys: ref Vec<f64>) -> f64 {
+    let n: i64 = len(ys) as i64;
+    if n < 3 {
+        return 0.0;
+    }
+    let h: f64 = (b - a) / ((n - 1) as f64);
+    let sum: f64 = ys[0] + ys[n - 1];
+    let i: i64 = 1;
+    while i < n - 1 {
+        if i % 2 == 1 {
+            sum = sum + 4.0 * ys[i];
+        } else {
+            sum = sum + 2.0 * ys[i];
+        }
+        i = i + 1;
+    }
+    return (h / 3.0) * sum;
+}
+
+// Romberg: Richardson-extrapolated trapezoidal estimates.
+// ys should have 2^levels + 1 equally-spaced samples for best accuracy.
+// WCET = 2n × 15 + levels² × 15 cycles (n ≤ 1024, levels ≤ 16).
+#[bounded_stack(bytes = 440)]
+fn integrate_romberg(a: f64, b: f64, ys: ref Vec<f64>, levels: i64) -> f64 {
+    let n: i64 = len(ys) as i64;
+    if n < 2 {
+        return 0.0;
+    }
+    if levels < 1 {
+        return integrate_trapz(a, b, ys);
+    }
+    let h0: f64 = b - a;
+    let r0: f64 = h0 * (ys[0] + ys[n - 1]) / 2.0;
+    let R: Vec<f64> = vec(r0);
+    let lev: i64 = 1;
+    while lev <= levels {
+        let pw: i64 = 1;
+        let pi: i64 = 0;
+        while pi < lev {
+            pw = pw * 2;
+            pi = pi + 1;
+        }
+        let step: i64 = (n - 1) / pw;
+        if step < 1 {
+            step = 1;
+        }
+        let hh: f64 = (b - a) / (pw as f64);
+        let s: f64 = (ys[0] + ys[n - 1]) / 2.0;
+        let idx: i64 = step;
+        while idx <= n - 1 - step {
+            s = s + ys[idx];
+            idx = idx + step;
+        }
+        push(mut ref R, hh * s);
+        lev = lev + 1;
+    }
+    let col: i64 = 1;
+    while col <= levels {
+        let pow4: f64 = pow(4.0, col as f64);
+        let row: i64 = levels;
+        while row >= col {
+            let r_new: f64 = (pow4 * R[row] - R[row - 1]) / (pow4 - 1.0);
+            set(mut ref R, row, r_new);
+            row = row - 1;
+        }
+        col = col + 1;
+    }
+    return R[levels];
+}
+
+// 5-point Gauss-Legendre quadrature on [a, b]; baked-in nodes and weights.
+// WCET = 5 × f_cycles + 100; f_cycles depends on caller's f.
+// bounded_stack = 144 + f's bounded_stack bytes.
+fn integrate_gauss_legendre_5(a: f64, b: f64, f: fn(f64) -> f64) -> f64 {
+    let mid: f64 = (a + b) / 2.0;
+    let half: f64 = (b - a) / 2.0;
+    let w0: f64 = 0.5688888888888889;
+    let x1: f64 = 0.5384693101056831;
+    let w1: f64 = 0.4786286704993665;
+    let x2: f64 = 0.9061798459386640;
+    let w2: f64 = 0.2369268850561891;
+    let v0: f64 = w0 * f(mid);
+    let v1: f64 = w1 * f(mid + half * x1) + w1 * f(mid - half * x1);
+    let v2: f64 = w2 * f(mid + half * x2) + w2 * f(mid - half * x2);
+    return half * (v0 + v1 + v2);
+}
+
+// Adaptive trapezoidal: recursively halve until |coarse-fine| < tol.
+// Recursion depth ≤ 52 (f64 mantissa halvings before underflow).
+// bounded_stack = 52 × 128 = 6656 bytes own frames + f's bounded_stack bytes.
+// WCET depends on f and tol; unbounded in general — caller must bound tol.
+#[bounded(52)]
+fn integrate_adaptive_trapz(a: f64, b: f64, f: fn(f64) -> f64, tol: f64) -> f64 {
+    let mid: f64 = (a + b) / 2.0;
+    let fa: f64 = f(a);
+    let fb: f64 = f(b);
+    let fm: f64 = f(mid);
+    let coarse: f64 = (b - a) * (fa + fb) / 2.0;
+    let fine: f64 = (mid - a) * (fa + fm) / 2.0 + (b - mid) * (fm + fb) / 2.0;
+    if abs(coarse - fine) < tol {
+        return fine + (fine - coarse) / 15.0;
+    }
+    return integrate_adaptive_trapz(a, mid, f, tol / 2.0)
+         + integrate_adaptive_trapz(mid, b, f, tol / 2.0);
+}
+
+// ── Differentiation ───────────────────────────────────────────────────────────
+
+// f'(x) ≈ (f(x+h) - f(x-h)) / 2h.  Error O(h²).
+#[bounded_stack(bytes = 64)]
+#[wcet(cycles = 64)]
+fn diff_central(f_xmh: f64, f_xph: f64, h: f64) -> f64 {
+    return (f_xph - f_xmh) / (2.0 * h);
+}
+
+// f'(x) ≈ (f(x+h) - f(x)) / h.  Error O(h).
+#[bounded_stack(bytes = 64)]
+#[wcet(cycles = 64)]
+fn diff_forward(f_x: f64, f_xph: f64, h: f64) -> f64 {
+    return (f_xph - f_x) / h;
+}
+
+// f''(x) ≈ (f(x-h) - 2f(x) + f(x+h)) / h².
+#[bounded_stack(bytes = 72)]
+#[wcet(cycles = 64)]
+fn diff_second(f_xmh: f64, f_x: f64, f_xph: f64, h: f64) -> f64 {
+    return (f_xmh - 2.0 * f_x + f_xph) / (h * h);
+}
+
+// Numerical gradient on a 1-D grid: central diff interior, fwd/bwd at ends.
+// WCET = n × 79 cycles (n ≤ 1024).
+#[bounded_stack(bytes = 240)]
+fn gradient_1d(xs: Vec<f64>, ys: Vec<f64>) -> Vec<f64> {
+    let n: i64 = len(ref ys) as i64;
+    if n < 2 {
+        return vec(0.0);
+    }
+    let result: Vec<f64> = vec(diff_forward(ys[0], ys[1], xs[1] - xs[0]));
+    let i: i64 = 1;
+    while i < n - 1 {
+        push(mut ref result, (ys[i + 1] - ys[i - 1]) / (xs[i + 1] - xs[i - 1]));
+        i = i + 1;
+    }
+    push(mut ref result, diff_forward(ys[n - 2], ys[n - 1], xs[n - 1] - xs[n - 2]));
+    return result;
+}
+
+// Numerical Jacobian: central-difference f' at each point in xs.
+// WCET = n × (2 × f_cycles + 79) cycles (n ≤ 1024); f_cycles depends on caller's f.
+// bounded_stack = 248 + f's bounded_stack bytes.
+fn jacobian_1d(xs: Vec<f64>, f: fn(f64) -> f64, h: f64) -> Vec<f64> {
+    let n: i64 = len(ref xs) as i64;
+    if n == 0 {
+        return vec(0.0);
+    }
+    let x0: f64 = xs[0];
+    let result: Vec<f64> = vec(diff_central(f(x0 - h), f(x0 + h), h));
+    let i: i64 = 1;
+    while i < n {
+        let x: f64 = xs[i];
+        push(mut ref result, diff_central(f(x - h), f(x + h), h));
+        i = i + 1;
+    }
+    return result;
+}
+
+// Diagonal of Hessian: second-order central difference at each point in xs.
+// WCET = n × (3 × f_cycles + 86) cycles (n ≤ 1024); f_cycles depends on caller's f.
+// bounded_stack = 256 + f's bounded_stack bytes.
+fn hessian_diag(xs: Vec<f64>, f: fn(f64) -> f64, h: f64) -> Vec<f64> {
+    let n: i64 = len(ref xs) as i64;
+    if n == 0 {
+        return vec(0.0);
+    }
+    let x0: f64 = xs[0];
+    let result: Vec<f64> = vec(diff_second(f(x0 - h), f(x0), f(x0 + h), h));
+    let i: i64 = 1;
+    while i < n {
+        let x: f64 = xs[i];
+        push(mut ref result, diff_second(f(x - h), f(x), f(x + h), h));
+        i = i + 1;
+    }
+    return result;
+}
+
+// ── Root-finding ─────────────────────────────────────────────────────────────
+
+#[bounded_stack(bytes = 72)]
+#[wcet(cycles = 64)]
+fn bisect_step(a: f64, b: f64, f_a: f64, f_b: f64) -> f64 {
+    return (a + b) / 2.0;
+}
+
+// Iterative bisection until |b-a| < tol; f(a) and f(b) must have opposite signs.
+// WCET = max_iter × (f_cycles + 30) cycles; f_cycles depends on caller's f.
+// bounded_stack = 160 + f's bounded_stack bytes.
+fn bisect(a: f64, b: f64, f: fn(f64) -> f64, tol: f64, max_iter: i64) -> f64 {
+    let lo: f64 = a;
+    let hi: f64 = b;
+    let f_lo: f64 = f(lo);
+    let iter: i64 = 0;
+    while iter < max_iter {
+        if hi - lo < tol {
+            return (lo + hi) / 2.0;
+        }
+        let mid: f64 = (lo + hi) / 2.0;
+        let f_mid: f64 = f(mid);
+        if f_lo * f_mid <= 0.0 {
+            hi = mid;
+        } else {
+            lo = mid;
+            f_lo = f_mid;
+        }
+        iter = iter + 1;
+    }
+    return (lo + hi) / 2.0;
+}
+
+#[bounded_stack(bytes = 72)]
+#[wcet(cycles = 64)]
+fn secant_step(x0: f64, x1: f64, f_x0: f64, f_x1: f64) -> f64 {
+    return x1 - f_x1 * (x1 - x0) / (f_x1 - f_x0);
+}
+
+// WCET = max_iter × (2 × f_cycles + 40) cycles; f_cycles depends on caller's f.
+// bounded_stack = 176 + f's bounded_stack bytes.
+fn secant(x0: f64, x1: f64, f: fn(f64) -> f64, tol: f64, max_iter: i64) -> f64 {
+    let xn: f64 = x0;
+    let xn1: f64 = x1;
+    let iter: i64 = 0;
+    while iter < max_iter {
+        let f_xn: f64 = f(xn);
+        let f_xn1: f64 = f(xn1);
+        let denom: f64 = f_xn1 - f_xn;
+        if abs(denom) < 1.0e-15 {
+            return xn1;
+        }
+        let xn2: f64 = xn1 - f_xn1 * (xn1 - xn) / denom;
+        if abs(xn2 - xn1) < tol {
+            return xn2;
+        }
+        xn = xn1;
+        xn1 = xn2;
+        iter = iter + 1;
+    }
+    return xn1;
+}
+
+#[bounded_stack(bytes = 64)]
+#[wcet(cycles = 64)]
+fn newton_step(x: f64, f_x: f64, f_prime_x: f64) -> f64 {
+    return x - f_x / f_prime_x;
+}
+
+// Newton-Raphson using diff_central internally for f'.
+// WCET = max_iter × (2 × f_cycles + 144) cycles; f_cycles depends on caller's f.
+// bounded_stack = 216 + f's bounded_stack bytes.
+fn newton(x0: f64, f: fn(f64) -> f64, tol: f64, max_iter: i64) -> f64 {
+    let h: f64 = 1.0e-7;
+    let x: f64 = x0;
+    let iter: i64 = 0;
+    while iter < max_iter {
+        let fx: f64 = f(x);
+        let fpx: f64 = diff_central(f(x - h), f(x + h), h);
+        if abs(fpx) < 1.0e-15 {
+            return x;
+        }
+        let xn: f64 = newton_step(x, fx, fpx);
+        if abs(xn - x) < tol {
+            return xn;
+        }
+        x = xn;
+        iter = iter + 1;
+    }
+    return x;
+}
+
+// Brent's method: bisect + secant + inverse quadratic interpolation.
+// Requires f(a)*f(b) <= 0.
+// WCET = max_iter × (f_cycles + 60) cycles; f_cycles depends on caller's f.
+// bounded_stack = 376 + f's bounded_stack bytes.
+fn brent(a: f64, b: f64, f: fn(f64) -> f64, tol: f64, max_iter: i64) -> f64 {
+    let aa: f64 = a;
+    let bb: f64 = b;
+    let faa: f64 = f(aa);
+    let fbb: f64 = f(bb);
+    if faa * fbb > 0.0 {
+        return bb;
+    }
+    if abs(faa) < abs(fbb) {
+        let bt1: f64 = aa; aa = bb; bb = bt1;
+        let bt2: f64 = faa; faa = fbb; fbb = bt2;
+    }
+    let cc: f64 = aa;
+    let fcc: f64 = faa;
+    let mflag: bool = true;
+    let ss: f64 = 0.0;
+    let dd: f64 = 0.0;
+    let iter: i64 = 0;
+    while iter < max_iter {
+        if abs(bb - aa) < tol || abs(fbb) < tol {
+            return bb;
+        }
+        if faa != fcc && fbb != fcc {
+            let p1: f64 = aa * fbb * fcc / ((faa - fbb) * (faa - fcc));
+            let p2: f64 = bb * faa * fcc / ((fbb - faa) * (fbb - fcc));
+            let p3: f64 = cc * faa * fbb / ((fcc - faa) * (fcc - fbb));
+            ss = p1 + p2 + p3;
+        } else {
+            ss = bb - fbb * (bb - aa) / (fbb - faa);
+        }
+        let lo3: f64 = (3.0 * aa + bb) / 4.0;
+        let cond1: bool = false;
+        if lo3 <= bb {
+            cond1 = ss < lo3 || ss > bb;
+        } else {
+            cond1 = ss < bb || ss > lo3;
+        }
+        let cond2: bool = mflag && abs(ss - bb) >= abs(bb - cc) / 2.0;
+        let cond3: bool = !mflag && abs(ss - bb) >= abs(cc - dd) / 2.0;
+        let cond4: bool = mflag && abs(bb - cc) < tol;
+        let cond5: bool = !mflag && abs(cc - dd) < tol;
+        if cond1 || cond2 || cond3 || cond4 || cond5 {
+            ss = (aa + bb) / 2.0;
+            mflag = true;
+        } else {
+            mflag = false;
+        }
+        let fss: f64 = f(ss);
+        dd = cc;
+        cc = bb;
+        fcc = fbb;
+        if faa * fss < 0.0 {
+            bb = ss;
+            fbb = fss;
+        } else {
+            aa = ss;
+            faa = fss;
+        }
+        if abs(faa) < abs(fbb) {
+            let bt3: f64 = aa; aa = bb; bb = bt3;
+            let bt4: f64 = faa; faa = fbb; fbb = bt4;
+        }
+        iter = iter + 1;
+    }
+    return bb;
+}
+
+// ── Optimization ──────────────────────────────────────────────────────────────────────
+
+// Golden-section search: 1D minimum of a unimodal function on [a, b].
+// Each step shrinks the interval by φ ≈ 0.618; converges in ≈2.08 log₁₀((b-a)/tol) evals.
+// WCET = max_iter × (2 × f_cycles + 40) cycles; f_cycles depends on caller's f.
+// bounded_stack = 200 + f's bounded_stack bytes.
+fn golden_section(a: f64, b: f64, f: fn(f64) -> f64, tol: f64, max_iter: i64) -> f64 {
+    let phi: f64 = 0.6180339887498949;
+    let lo: f64 = a;
+    let hi: f64 = b;
+    let c: f64 = hi - phi * (hi - lo);
+    let d: f64 = lo + phi * (hi - lo);
+    let fc: f64 = f(c);
+    let fd: f64 = f(d);
+    let i: i64 = 0;
+    while i < max_iter {
+        if abs(hi - lo) < tol {
+            return (lo + hi) / 2.0;
+        }
+        if fc < fd {
+            hi = d;
+            d = c;
+            fd = fc;
+            c = hi - phi * (hi - lo);
+            fc = f(c);
+        } else {
+            lo = c;
+            c = d;
+            fc = fd;
+            d = lo + phi * (hi - lo);
+            fd = f(d);
+        }
+        i = i + 1;
+    }
+    return (lo + hi) / 2.0;
+}
+
+// Brent's method for 1D minimization: parabolic interpolation + golden-section fallback.
+// Superlinear convergence near the minimum; does not require derivatives.
+// f must have a minimum strictly inside (a, b).
+// WCET = max_iter × (f_cycles + 80) cycles; f_cycles depends on caller's f.
+// bounded_stack = 409 + f's bounded_stack bytes.
+fn brent_min(a: f64, b: f64, f: fn(f64) -> f64, tol: f64, max_iter: i64) -> f64 {
+    let cg: f64 = 0.3819660112501051;
+    let eps: f64 = 1.0e-10;
+    let lo: f64 = a;
+    let hi: f64 = b;
+    let x: f64 = lo + cg * (hi - lo);
+    let w: f64 = x;
+    let v: f64 = x;
+    let fx: f64 = f(x);
+    let fw: f64 = fx;
+    let fv: f64 = fx;
+    let deltax: f64 = 0.0;
+    let i: i64 = 0;
+    while i < max_iter {
+        let xm: f64 = (lo + hi) / 2.0;
+        let t1: f64 = tol * abs(x) + eps;
+        let t2: f64 = 2.0 * t1;
+        if abs(x - xm) < t2 - 0.5 * (hi - lo) {
+            return x;
+        }
+        let rat: f64 = 0.0;
+        if abs(deltax) > t1 {
+            let tmp1: f64 = (x - w) * (fx - fv);
+            let tmp2: f64 = (x - v) * (fx - fw);
+            let p: f64 = (x - v) * tmp2 - (x - w) * tmp1;
+            let raw_q: f64 = 2.0 * (tmp2 - tmp1);
+            let pp: f64 = 0.0;
+            let qq: f64 = 0.0;
+            if raw_q > 0.0 {
+                pp = 0.0 - p;
+                qq = raw_q;
+            } else {
+                pp = p;
+                qq = 0.0 - raw_q;
+            }
+            let dx_prev: f64 = deltax;
+            deltax = raw_q;
+            let use_par: bool = abs(pp) < abs(0.5 * qq * dx_prev) && pp > qq * (lo - x) && pp < qq * (hi - x);
+            if use_par {
+                rat = pp / qq;
+                let u_par: f64 = x + rat;
+                if (u_par - lo) < t2 || (hi - u_par) < t2 {
+                    if x < xm { rat = t1; } else { rat = 0.0 - t1; }
+                }
+            } else {
+                if x >= xm { deltax = lo - x; } else { deltax = hi - x; }
+                rat = cg * deltax;
+            }
+        } else {
+            if x >= xm { deltax = lo - x; } else { deltax = hi - x; }
+            rat = cg * deltax;
+        }
+        let u: f64 = 0.0;
+        if abs(rat) >= t1 {
+            u = x + rat;
+        } else {
+            if rat >= 0.0 { u = x + t1; } else { u = x - t1; }
+        }
+        let fu: f64 = f(u);
+        if fu > fx {
+            if u < x { lo = u; } else { hi = u; }
+            if fu <= fw || w == x {
+                v = w; fv = fw;
+                w = u; fw = fu;
+            } else {
+                if fu <= fv || v == x || v == w {
+                    v = u; fv = fu;
+                }
+            }
+        } else {
+            if u >= x { lo = x; } else { hi = x; }
+            v = w; fv = fw;
+            w = x; fw = fx;
+            x = u; fx = fu;
+        }
+        i = i + 1;
+    }
+    return x;
+}
+
+// Newton's method for 1D minimization: x ← x − f'(x)/f''(x).
+// f' and f'' approximated by central differences with h = 1e-5.
+// Requires x0 near the desired minimum; quadratically convergent once close.
+// WCET = max_iter × (3 × f_cycles + 144) cycles; f_cycles depends on caller's f.
+// bounded_stack = 248 + f's bounded_stack bytes.
+fn newton_min(x0: f64, f: fn(f64) -> f64, tol: f64, max_iter: i64) -> f64 {
+    let h: f64 = 1.0e-5;
+    let x: f64 = x0;
+    let i: i64 = 0;
+    while i < max_iter {
+        let fxmh: f64 = f(x - h);
+        let fx: f64 = f(x);
+        let fxph: f64 = f(x + h);
+        let fp: f64 = diff_central(fxmh, fxph, h);
+        let fpp: f64 = diff_second(fxmh, fx, fxph, h);
+        if abs(fpp) < 1.0e-15 {
+            return x;
+        }
+        let step: f64 = fp / fpp;
+        x = x - step;
+        if abs(step) < tol {
+            return x;
+        }
+        i = i + 1;
+    }
+    return x;
+}
+
+// ── ODE solvers ───────────────────────────────────────────────────────────────
+
+#[bounded_stack(bytes = 64)]
+#[wcet(cycles = 64)]
+fn euler_step(y: f64, h: f64, f_val: f64) -> f64 {
+    return y + h * f_val;
+}
+
+// WCET = n × (f_cycles + 79) cycles (n ≤ 1024); f_cycles depends on caller's f.
+// bounded_stack = 232 + f's bounded_stack bytes.
+fn euler_solve(y0: f64, ts: ref Vec<f64>, f: fn(f64, f64) -> f64) -> Vec<f64> {
+    let n: i64 = len(ts) as i64;
+    let result: Vec<f64> = vec(y0);
+    let y: f64 = y0;
+    let i: i64 = 0;
+    while i < n - 1 {
+        let hh: f64 = ts[i + 1] - ts[i];
+        y = euler_step(y, hh, f(ts[i], y));
+        push(mut ref result, y);
+        i = i + 1;
+    }
+    return result;
+}
+
+#[bounded_stack(bytes = 88)]
+#[wcet(cycles = 64)]
+fn rk4_step(y: f64, h: f64, k1: f64, k2: f64, k3: f64, k4: f64) -> f64 {
+    return y + (h / 6.0) * (k1 + 2.0 * k2 + 2.0 * k3 + k4);
+}
+
+// WCET = n × (4 × f_cycles + 118) cycles (n ≤ 1024); f_cycles depends on caller's f.
+// bounded_stack = 296 + f's bounded_stack bytes.
+fn rk4_solve(y0: f64, ts: ref Vec<f64>, f: fn(f64, f64) -> f64) -> Vec<f64> {
+    let n: i64 = len(ts) as i64;
+    let result: Vec<f64> = vec(y0);
+    let y: f64 = y0;
+    let i: i64 = 0;
+    while i < n - 1 {
+        let hh: f64 = ts[i + 1] - ts[i];
+        let t: f64 = ts[i];
+        let k1: f64 = f(t, y);
+        let k2: f64 = f(t + hh / 2.0, y + hh / 2.0 * k1);
+        let k3: f64 = f(t + hh / 2.0, y + hh / 2.0 * k2);
+        let k4: f64 = f(t + hh, y + hh * k3);
+        y = rk4_step(y, hh, k1, k2, k3, k4);
+        push(mut ref result, y);
+        i = i + 1;
+    }
+    return result;
+}
+
+// Dormand-Prince RK45 step (5th-order solution).
+// WCET = 6 × f_cycles + 120 cycles; f_cycles depends on caller's f.
+// bounded_stack = 120 + f's bounded_stack bytes.
+fn rk45_step(t: f64, y: f64, h: f64, f: fn(f64, f64) -> f64) -> f64 {
+    let k1: f64 = f(t, y);
+    let k2: f64 = f(t + h / 5.0,        y + h * k1 / 5.0);
+    let k3: f64 = f(t + 3.0 * h / 10.0, y + h * (3.0 * k1 / 40.0 + 9.0 * k2 / 40.0));
+    let k4: f64 = f(t + 4.0 * h / 5.0,  y + h * (44.0 * k1 / 45.0 - 56.0 * k2 / 15.0 + 32.0 * k3 / 9.0));
+    let k5: f64 = f(t + 8.0 * h / 9.0,  y + h * (19372.0 * k1 / 6561.0 - 25360.0 * k2 / 2187.0 + 64448.0 * k3 / 6561.0 - 212.0 * k4 / 729.0));
+    let k6: f64 = f(t + h, y + h * (9017.0 * k1 / 3168.0 - 355.0 * k2 / 33.0 + 46732.0 * k3 / 5247.0 + 49.0 * k4 / 176.0 - 5103.0 * k5 / 18656.0));
+    return y + h * (35.0 * k1 / 384.0 + 500.0 * k3 / 1113.0 + 125.0 * k4 / 192.0 - 2187.0 * k5 / 6784.0 + 11.0 * k6 / 84.0);
+}
+
+// Adams-Bashforth 2-step explicit method.
+#[bounded_stack(bytes = 72)]
+#[wcet(cycles = 64)]
+fn adams_bashforth_2(y_curr: f64, f_prev: f64, f_curr: f64, h: f64) -> f64 {
+    return y_curr + h * (3.0 * f_curr - f_prev) / 2.0;
+}
+
+// ── Implicit ODE solvers (v0.3.0) ────────────────────────────────────────────
+//
+// Backward Euler and Crank-Nicolson are both A-stable: unlike the explicit
+// solvers above, they stay bounded on stiff systems (large |df/dy|) even
+// with a step size that would make explicit Euler diverge. Each step
+// solves its implicit equation with Newton's method, using a central-
+// difference estimate of the equation's derivative (same technique this
+// file's own `newton()` uses for root-finding) -- not fixed-point
+// iteration, which would fail to converge on the very stiff problems these
+// solvers exist for (fixed-point iteration on backward Euler is only a
+// contraction for h < 1/|df/dy|, defeating the point of an unconditionally
+// stable method). Each _step function inlines its own Newton loop rather
+// than factoring out a shared g(y)->f64 helper, since vāṇी has no closures
+// and g would need to capture y_curr/h/f/t_next.
+
+// One backward Euler step: solves y_next = y_curr + h*f(t_next, y_next)
+// for y_next via Newton's method (central-difference derivative, step eps).
+#[bounded_stack(bytes = 184)]
+fn backward_euler_step(t_next: f64, y_curr: f64, h: f64, f: fn(f64, f64) -> f64, tol: f64, max_iter: i64) -> f64 {
+    let eps: f64 = 1.0e-6;
+    let y: f64 = y_curr;
+    let iter: i64 = 0;
+    while iter < max_iter {
+        let gy: f64 = y - y_curr - h * f(t_next, y);
+        let gyp: f64 = (y + eps) - y_curr - h * f(t_next, y + eps);
+        let gym: f64 = (y - eps) - y_curr - h * f(t_next, y - eps);
+        let gp: f64 = (gyp - gym) / (2.0 * eps);
+        if abs(gp) < 1.0e-300 {
+            return y;
+        }
+        let y_new: f64 = y - gy / gp;
+        if abs(y_new - y) < tol {
+            return y_new;
+        }
+        y = y_new;
+        iter = iter + 1;
+    }
+    return y;
+}
+
+// Runs backward_euler_step across every interval in ts.
+#[bounded_stack(bytes = 352)]
+fn backward_euler_solve(y0: f64, ts: ref Vec<f64>, f: fn(f64, f64) -> f64, tol: f64, max_iter: i64) -> Vec<f64> {
+    let n: i64 = len(ts) as i64;
+    let result: Vec<f64> = vec(y0);
+    let y: f64 = y0;
+    let i: i64 = 0;
+    while i < n - 1 {
+        let hh: f64 = ts[i + 1] - ts[i];
+        y = backward_euler_step(ts[i + 1], y, hh, f, tol, max_iter);
+        push(mut ref result, y);
+        i = i + 1;
+    }
+    return result;
+}
+
+// One Crank-Nicolson step: solves y_next = y_curr + (h/2)*(f(t_curr,y_curr)
+// + f(t_next,y_next)) for y_next via Newton's method. Second-order accurate
+// (vs. backward Euler's first-order), same unconditional stability.
+#[bounded_stack(bytes = 200)]
+fn crank_nicolson_step(t_curr: f64, y_curr: f64, t_next: f64, h: f64, f: fn(f64, f64) -> f64, tol: f64, max_iter: i64) -> f64 {
+    let eps: f64 = 1.0e-6;
+    let f_curr: f64 = f(t_curr, y_curr);
+    let y: f64 = y_curr;
+    let iter: i64 = 0;
+    while iter < max_iter {
+        let gy: f64 = y - y_curr - (h / 2.0) * (f_curr + f(t_next, y));
+        let gyp: f64 = (y + eps) - y_curr - (h / 2.0) * (f_curr + f(t_next, y + eps));
+        let gym: f64 = (y - eps) - y_curr - (h / 2.0) * (f_curr + f(t_next, y - eps));
+        let gp: f64 = (gyp - gym) / (2.0 * eps);
+        if abs(gp) < 1.0e-300 {
+            return y;
+        }
+        let y_new: f64 = y - gy / gp;
+        if abs(y_new - y) < tol {
+            return y_new;
+        }
+        y = y_new;
+        iter = iter + 1;
+    }
+    return y;
+}
+
+// Runs crank_nicolson_step across every interval in ts.
+#[bounded_stack(bytes = 368)]
+fn crank_nicolson_solve(y0: f64, ts: ref Vec<f64>, f: fn(f64, f64) -> f64, tol: f64, max_iter: i64) -> Vec<f64> {
+    let n: i64 = len(ts) as i64;
+    let result: Vec<f64> = vec(y0);
+    let y: f64 = y0;
+    let i: i64 = 0;
+    while i < n - 1 {
+        let hh: f64 = ts[i + 1] - ts[i];
+        y = crank_nicolson_step(ts[i], y, ts[i + 1], hh, f, tol, max_iter);
+        push(mut ref result, y);
+        i = i + 1;
+    }
+    return result;
+}
+
+// ── ODE boundary-value problems: shooting method (v0.3.0) ───────────────────
+//
+// Solves y'' = f(t, y, y') on [a,b] with Dirichlet conditions y(a)=ya,
+// y(b)=yb, by converting to the first-order pair y'=v, v'=f(t,y,v) and
+// searching (via secant iteration on the initial slope s=y'(a)) for the
+// slope that makes a forward RK4 integration land on y(b)=yb. The 2-value
+// state [y,v] is threaded through as a Vec<f64> of length 2 rather than
+// two separate f64 outputs, since a function can only return one value.
+
+// One RK4 step for the paired system y'=v, v'=f(t,y,v). Returns [y_new, v_new].
+#[bounded_stack(bytes = 264)]
+fn bvp_rk4_step(t: f64, y: f64, v: f64, h: f64, f: fn(f64, f64, f64) -> f64) -> Vec<f64> {
+    let k1y: f64 = v;
+    let k1v: f64 = f(t, y, v);
+    let k2y: f64 = v + h / 2.0 * k1v;
+    let k2v: f64 = f(t + h / 2.0, y + h / 2.0 * k1y, v + h / 2.0 * k1v);
+    let k3y: f64 = v + h / 2.0 * k2v;
+    let k3v: f64 = f(t + h / 2.0, y + h / 2.0 * k2y, v + h / 2.0 * k2v);
+    let k4y: f64 = v + h * k3v;
+    let k4v: f64 = f(t + h, y + h * k3y, v + h * k3v);
+    let y_new: f64 = y + (h / 6.0) * (k1y + 2.0 * k2y + 2.0 * k3y + k4y);
+    let v_new: f64 = v + (h / 6.0) * (k1v + 2.0 * k2v + 2.0 * k3v + k4v);
+    let out: Vec<f64> = vec();
+    push(mut ref out, y_new);
+    push(mut ref out, v_new);
+    return out;
+}
+
+// Integrates forward from t=a, y=ya, y'=s to t=b using n_steps of
+// bvp_rk4_step. Returns [y(b), y'(b)] only (cheap -- used inside the
+// secant search below); see bvp_shoot_trajectory for the full path.
+#[bounded_stack(bytes = 424)]
+fn bvp_shoot_integrate(a: f64, ya: f64, s: f64, b: f64, n_steps: i64, f: fn(f64, f64, f64) -> f64) -> Vec<f64> {
+    let h: f64 = (b - a) / (n_steps as f64);
+    let y: f64 = ya;
+    let v: f64 = s;
+    let t: f64 = a;
+    let i: i64 = 0;
+    while i < n_steps {
+        let step: Vec<f64> = bvp_rk4_step(t, y, v, h, f);
+        y = step[0];
+        v = step[1];
+        t = t + h;
+        i = i + 1;
+    }
+    let out: Vec<f64> = vec();
+    push(mut ref out, y);
+    push(mut ref out, v);
+    return out;
+}
+
+// Same forward integration as bvp_shoot_integrate, but returns the full
+// y(t) trajectory (n_steps+1 values) instead of just the endpoint.
+#[bounded_stack(bytes = 424)]
+fn bvp_shoot_trajectory(a: f64, ya: f64, s: f64, b: f64, n_steps: i64, f: fn(f64, f64, f64) -> f64) -> Vec<f64> {
+    let h: f64 = (b - a) / (n_steps as f64);
+    let y: f64 = ya;
+    let v: f64 = s;
+    let t: f64 = a;
+    let result: Vec<f64> = vec(y);
+    let i: i64 = 0;
+    while i < n_steps {
+        let step: Vec<f64> = bvp_rk4_step(t, y, v, h, f);
+        y = step[0];
+        v = step[1];
+        t = t + h;
+        push(mut ref result, y);
+        i = i + 1;
+    }
+    return result;
+}
+
+// Solves the two-point BVP by secant search over the initial slope s,
+// starting from guesses s0/s1, until the forward-integrated y(b) is within
+// tol of the target yb. Returns the full y(t) trajectory at the converged
+// slope (n_steps+1 values, matching euler_solve/rk4_solve's convention).
+#[bounded_stack(bytes = 784)]
+fn bvp_shoot_solve(a: f64, b: f64, ya: f64, yb: f64, f: fn(f64, f64, f64) -> f64, s0: f64, s1: f64, n_steps: i64, tol: f64, max_iter: i64) -> Vec<f64> {
+    let sa: f64 = s0;
+    let sb: f64 = s1;
+    let end_a: Vec<f64> = bvp_shoot_integrate(a, ya, sa, b, n_steps, f);
+    let ga: f64 = end_a[0] - yb;
+    let end_b: Vec<f64> = bvp_shoot_integrate(a, ya, sb, b, n_steps, f);
+    let gb: f64 = end_b[0] - yb;
+    let iter: i64 = 0;
+    while iter < max_iter {
+        let denom: f64 = gb - ga;
+        if abs(denom) < 1.0e-15 {
+            return bvp_shoot_trajectory(a, ya, sb, b, n_steps, f);
+        }
+        let sc: f64 = sb - gb * (sb - sa) / denom;
+        let end_c: Vec<f64> = bvp_shoot_integrate(a, ya, sc, b, n_steps, f);
+        let gc: f64 = end_c[0] - yb;
+        if abs(gc) < tol {
+            return bvp_shoot_trajectory(a, ya, sc, b, n_steps, f);
+        }
+        sa = sb;
+        ga = gb;
+        sb = sc;
+        gb = gc;
+        iter = iter + 1;
+    }
+    return bvp_shoot_trajectory(a, ya, sb, b, n_steps, f);
+}
+
+// ── Polynomial arithmetic ─────────────────────────────────────────────────────
+
+// Horner's method: p(x) = c[0] + c[1]x + … + c[n]xⁿ in O(n).
+// WCET = n × 15 cycles (n ≤ 1024).
+#[bounded_stack(bytes = 120)]
+fn poly_eval(coeffs: Vec<f64>, x: f64) -> f64 {
+    let n: i64 = len(ref coeffs) as i64;
+    if n == 0 {
+        return 0.0;
+    }
+    let result: f64 = coeffs[n - 1];
+    let i: i64 = n - 2;
+    while i >= 0 {
+        result = f64_fma(result, x, coeffs[i]);
+        i = i - 1;
+    }
+    return result;
+}
+
+// d/dx [c0 + c1 x + c2 x² + …] = [c1, 2c2, 3c3, …]
+// WCET = n × 40 cycles (n ≤ 1024).
+#[bounded_stack(bytes = 152)]
+fn poly_deriv_coeffs(coeffs: Vec<f64>) -> Vec<f64> {
+    let n: i64 = len(ref coeffs) as i64;
+    if n < 2 {
+        return vec(0.0);
+    }
+    let result: Vec<f64> = vec(1.0 * coeffs[1]);
+    let i: i64 = 2;
+    while i < n {
+        push(mut ref result, (i as f64) * coeffs[i]);
+        i = i + 1;
+    }
+    return result;
+}
+
+// Coefficient-wise addition; result length = max(|a|, |b|).
+// WCET = n × 45 cycles (n ≤ 1024).
+#[bounded_stack(bytes = 264)]
+fn poly_add(a: Vec<f64>, b: Vec<f64>) -> Vec<f64> {
+    let na: i64 = len(ref a) as i64;
+    let nb: i64 = len(ref b) as i64;
+    let nmax: i64 = na;
+    if nb > na {
+        nmax = nb;
+    }
+    if nmax == 0 {
+        return vec(0.0);
+    }
+    let va0: f64 = 0.0;
+    let vb0: f64 = 0.0;
+    if na > 0 { va0 = a[0]; }
+    if nb > 0 { vb0 = b[0]; }
+    let result: Vec<f64> = vec(va0 + vb0);
+    let i: i64 = 1;
+    while i < nmax {
+        let va: f64 = 0.0;
+        let vb: f64 = 0.0;
+        if i < na { va = a[i]; }
+        if i < nb { vb = b[i]; }
+        push(mut ref result, va + vb);
+        i = i + 1;
+    }
+    return result;
+}
+
+// Convolution multiply; result length = |a| + |b| - 1.
+// WCET = n² × 20 cycles (n ≤ 64; typical polynomial degrees).
+#[bounded_stack(bytes = 224)]
+fn poly_mul(a: Vec<f64>, b: Vec<f64>) -> Vec<f64> {
+    let na: i64 = len(ref a) as i64;
+    let nb: i64 = len(ref b) as i64;
+    if na == 0 || nb == 0 {
+        return vec(0.0);
+    }
+    let nc: i64 = na + nb - 1;
+    let result: Vec<f64> = vec(0.0);
+    let ii: i64 = 1;
+    while ii < nc {
+        push(mut ref result, 0.0);
+        ii = ii + 1;
+    }
+    let j: i64 = 0;
+    while j < na {
+        let k: i64 = 0;
+        while k < nb {
+            set(mut ref result, j + k, result[j + k] + a[j] * b[k]);
+            k = k + 1;
+        }
+        j = j + 1;
+    }
+    return result;
+}
+
+// ── Interpolation ─────────────────────────────────────────────────────────────
+
+// Lagrange interpolation at x given n data points. O(n²).
+// WCET = n² × 20 cycles (n ≤ 64; typical interpolation node counts).
+#[bounded_stack(bytes = 176)]
+fn lagrange_interp(xs: ref Vec<f64>, ys: ref Vec<f64>, x: f64) -> f64 {
+    let n: i64 = len(xs) as i64;
+    if n == 0 {
+        return 0.0;
+    }
+    let result: f64 = 0.0;
+    let j: i64 = 0;
+    while j < n {
+        let lj: f64 = 1.0;
+        let k: i64 = 0;
+        while k < n {
+            if k != j {
+                lj = lj * (x - xs[k]) / (xs[j] - xs[k]);
+            }
+            k = k + 1;
+        }
+        result = result + ys[j] * lj;
+        j = j + 1;
+    }
+    return result;
+}
+
+// O(log n) binary-search + linear interpolation on a sorted table.
+// Clamps for x outside [xs[0], xs[n-1]].
+// WCET = log₂(n) × 15 + 50 cycles (n ≤ 1024).
+#[bounded_stack(bytes = 160)]
+fn linear_interp_table(xs: ref Vec<f64>, ys: ref Vec<f64>, x: f64) -> f64 {
+    let n: i64 = len(xs) as i64;
+    if n < 2 {
+        return 0.0;
+    }
+    if x <= xs[0] {
+        return ys[0];
+    }
+    if x >= xs[n - 1] {
+        return ys[n - 1];
+    }
+    let lo: i64 = 0;
+    let hi: i64 = n - 1;
+    while hi - lo > 1 {
+        let mid: i64 = (lo + hi) / 2;
+        if xs[mid] <= x {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    return f64_lerp(ys[lo], ys[hi], (x - xs[lo]) / (xs[hi] - xs[lo]));
+}
+
+// Natural cubic spline: Thomas algorithm for M[0..n-1].
+// M[0] = M[n-1] = 0 (natural BCs). Pass M to cubic_spline_eval.
+// WCET = 6 × n × 20 cycles (n ≤ 1024; 6 linear passes through the data).
+#[bounded_stack(bytes = 520)]
+fn cubic_spline_natural(xs: ref Vec<f64>, ys: ref Vec<f64>) -> Vec<f64> {
+    let n: i64 = len(xs) as i64;
+    if n < 2 {
+        return vec(0.0);
+    }
+    if n == 2 {
+        let r: Vec<f64> = vec(0.0);
+        push(mut ref r, 0.0);
+        return r;
+    }
+    let h: Vec<f64> = vec(xs[1] - xs[0]);
+    let i: i64 = 1;
+    while i < n - 1 {
+        push(mut ref h, xs[i + 1] - xs[i]);
+        i = i + 1;
+    }
+    let m: i64 = n - 2;
+    let rhs0: f64 = 6.0 * ((ys[2] - ys[1]) / h[1] - (ys[1] - ys[0]) / h[0]);
+    let diag: Vec<f64> = vec(2.0 * (h[0] + h[1]));
+    let upper: Vec<f64> = vec(h[1]);
+    let rhs: Vec<f64> = vec(rhs0);
+    let j: i64 = 2;
+    while j < n - 1 {
+        push(mut ref diag, 2.0 * (h[j - 1] + h[j]));
+        push(mut ref rhs, 6.0 * ((ys[j + 1] - ys[j]) / h[j] - (ys[j] - ys[j - 1]) / h[j - 1]));
+        if j < n - 2 {
+            push(mut ref upper, h[j]);
+        }
+        j = j + 1;
+    }
+    // Thomas forward sweep
+    let w: Vec<f64> = vec(diag[0]);
+    let g: Vec<f64> = vec(rhs[0]);
+    let k: i64 = 1;
+    while k < m {
+        let sub: f64 = h[k] / w[k - 1];
+        push(mut ref w, diag[k] - sub * upper[k - 1]);
+        push(mut ref g, rhs[k] - sub * g[k - 1]);
+        k = k + 1;
+    }
+    // Back substitution (build Mi in reverse, then reverse)
+    let Mi: Vec<f64> = vec(g[m - 1] / w[m - 1]);
+    let kk: i64 = m - 2;
+    while kk >= 0 {
+        push(mut ref Mi, (g[kk] - upper[kk] * Mi[m - 2 - kk]) / w[kk]);
+        kk = kk - 1;
+    }
+    // Reverse Mi into Mi2
+    let Mi2: Vec<f64> = vec(Mi[m - 1]);
+    let p: i64 = m - 2;
+    while p >= 0 {
+        push(mut ref Mi2, Mi[p]);
+        p = p - 1;
+    }
+    // Assemble full M with boundary zeros
+    let M: Vec<f64> = vec(0.0);
+    let q: i64 = 0;
+    while q < m {
+        push(mut ref M, Mi2[q]);
+        q = q + 1;
+    }
+    push(mut ref M, 0.0);
+    return M;
+}
+
+// Evaluate cubic spline at x given xs, ys, and M from cubic_spline_natural.
+// WCET = log₂(n) × 15 + 60 cycles (n ≤ 1024).
+#[bounded_stack(bytes = 200)]
+fn cubic_spline_eval(xs: ref Vec<f64>, ys: ref Vec<f64>, M: ref Vec<f64>, x: f64) -> f64 {
+    let n: i64 = len(xs) as i64;
+    if n < 2 {
+        return 0.0;
+    }
+    let i: i64 = 0;
+    while i < n - 2 {
+        if xs[i + 1] >= x {
+            break;
+        }
+        i = i + 1;
+    }
+    let hh: f64 = xs[i + 1] - xs[i];
+    let t: f64 = x - xs[i];
+    let ca: f64 = ys[i];
+    let cb: f64 = (ys[i + 1] - ys[i]) / hh - hh * (2.0 * M[i] + M[i + 1]) / 6.0;
+    let cc: f64 = M[i] / 2.0;
+    let cd: f64 = (M[i + 1] - M[i]) / (6.0 * hh);
+    return ca + t * (cb + t * (cc + t * cd));
+}
+
+// ── Series & summation ────────────────────────────────────────────────────────
+
+// Kahan compensated summation: minimises floating-point rounding error.
+// WCET = n × 20 cycles (n ≤ 1024).
+#[bounded_stack(bytes = 136)]
+fn kahan_sum(xs: Vec<f64>) -> f64 {
+    let n: i64 = len(ref xs) as i64;
+    let sum: f64 = 0.0;
+    let c: f64 = 0.0;
+    let i: i64 = 0;
+    while i < n {
+        let y: f64 = xs[i] - c;
+        let tt: f64 = sum + y;
+        c = (tt - sum) - y;
+        sum = tt;
+        i = i + 1;
+    }
+    return sum;
+}
+
+// Prefix sums: result[i] = xs[0] + … + xs[i].
+// WCET = n × 30 cycles (n ≤ 1024).
+#[bounded_stack(bytes = 168)]
+fn partial_sum(xs: Vec<f64>) -> Vec<f64> {
+    let n: i64 = len(ref xs) as i64;
+    if n == 0 {
+        return vec(0.0);
+    }
+    let result: Vec<f64> = vec(xs[0]);
+    let acc: f64 = xs[0];
+    let i: i64 = 1;
+    while i < n {
+        acc = acc + xs[i];
+        push(mut ref result, acc);
+        i = i + 1;
+    }
+    return result;
+}
+
+// Welford online mean update: call once per new sample x; n is the new count.
+#[bounded_stack(bytes = 64)]
+#[wcet(cycles = 64)]
+fn running_mean_update(mean: f64, x: f64, n: i64) -> f64 {
+    return mean + (x - mean) / (n as f64);
+}
+

@@ -1,0 +1,67 @@
+use "../src/lib.vani";
+
+fn x_sq_minus_2(x: f64) -> f64 { return x * x - 2.0; }
+fn x_cubed_minus_x_minus_2(x: f64) -> f64 { return x * x * x - x - 2.0; }
+
+// bisect_step: midpoint of interval.
+#[test]
+fn test_bisect_step() -> i64 {
+    let mid: f64 = bisect_step(1.0, 3.0, 0.0, 0.0);
+    assert abs(mid - 2.0) < 1.0e-12;
+    return 0;
+}
+
+// secant_step: from (1,−0.5) and (2,0.5) toward root of f(x)=x−1.5.
+#[test]
+fn test_secant_step() -> i64 {
+    let next: f64 = secant_step(1.0, 2.0, 0.0 - 0.5, 0.5);
+    assert abs(next - 1.5) < 1.0e-12;
+    return 0;
+}
+
+// newton_step: one step for x²−2 at x=1.5, f'=3.
+#[test]
+fn test_newton_step() -> i64 {
+    let x: f64 = 1.5;
+    let fx: f64 = x * x - 2.0;
+    let fpx: f64 = 2.0 * x;
+    let next: f64 = newton_step(x, fx, fpx);
+    // 1.5 − (0.25/3.0) = 1.41666...
+    assert abs(next - 1.41666666666666667) < 1.0e-10;
+    return 0;
+}
+
+// bisect: √2 from [1,2], tol=1e-10.
+#[test]
+fn test_bisect_sqrt2() -> i64 {
+    let root: f64 = bisect(1.0, 2.0, x_sq_minus_2, 1.0e-10, 100);
+    assert abs(root * root - 2.0) < 1.0e-9;
+    return 0;
+}
+
+// secant: √2 from x0=1.0, x1=2.0.
+#[test]
+fn test_secant_sqrt2() -> i64 {
+    let root: f64 = secant(1.0, 2.0, x_sq_minus_2, 1.0e-10, 50);
+    assert abs(root * root - 2.0) < 1.0e-9;
+    return 0;
+}
+
+// newton: √2 starting from 1.5.
+#[test]
+fn test_newton_sqrt2() -> i64 {
+    let root: f64 = newton(1.5, x_sq_minus_2, 1.0e-10, 30);
+    assert abs(root * root - 2.0) < 1.0e-9;
+    return 0;
+}
+
+// brent: real root of x³−x−2 in [1,2].
+#[test]
+fn test_brent_cubic() -> i64 {
+    let root: f64 = brent(1.0, 2.0, x_cubed_minus_x_minus_2, 1.0e-10, 100);
+    let residual: f64 = root * root * root - root - 2.0;
+    assert abs(residual) < 1.0e-9;
+    return 0;
+}
+
+fn main() -> i64 { return 0; }

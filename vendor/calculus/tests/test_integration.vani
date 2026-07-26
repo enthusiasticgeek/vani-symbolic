@@ -1,0 +1,89 @@
+use "../src/lib.vani";
+
+fn sq(x: f64) -> f64 { return x * x; }
+fn sin_fn(x: f64) -> f64 { return sin(x); }
+
+fn make_sin_ys(n: i64, pi: f64) -> Vec<f64> {
+    let ys: Vec<f64> = vec(sin(0.0));
+    let i: i64 = 1;
+    while i < n {
+        let x: f64 = pi * (i as f64) / ((n - 1) as f64);
+        push(mut ref ys, sin(x));
+        i = i + 1;
+    }
+    return ys;
+}
+
+fn make_sq_ys(n: i64) -> Vec<f64> {
+    let ys: Vec<f64> = vec(0.0);
+    let i: i64 = 1;
+    while i < n {
+        let x: f64 = (i as f64) / ((n - 1) as f64);
+        push(mut ref ys, x * x);
+        i = i + 1;
+    }
+    return ys;
+}
+
+// ∫₀^π sin(x) dx = 2.0 — trapezoidal, 1001 uniform samples.
+#[test]
+fn test_trapz_sin_pi() -> i64 {
+    let pi: f64 = 3.141592653589793;
+    let ys: Vec<f64> = make_sin_ys(1001, pi);
+    let result: f64 = integrate_trapz(0.0, pi, ref ys);
+    assert abs(result - 2.0) < 1.0e-5;
+    return 0;
+}
+
+// ∫₀^π sin(x) dx = 2.0 — Simpson's rule, O(h^4) accuracy.
+#[test]
+fn test_simpson_sin_pi() -> i64 {
+    let pi: f64 = 3.141592653589793;
+    let ys: Vec<f64> = make_sin_ys(1001, pi);
+    let result: f64 = integrate_simpson(0.0, pi, ref ys);
+    assert abs(result - 2.0) < 1.0e-9;
+    return 0;
+}
+
+// ∫₀¹ x² dx = 1/3 — Romberg, 17 samples (2^4+1), 4 extrapolation levels.
+#[test]
+fn test_romberg_x_sq() -> i64 {
+    let ys: Vec<f64> = make_sq_ys(17);
+    let result: f64 = integrate_romberg(0.0, 1.0, ref ys, 4);
+    assert abs(result - 0.3333333333333333) < 1.0e-8;
+    return 0;
+}
+
+// ∫₀¹ x² dx = 1/3 — 5-point Gauss-Legendre, exact for polynomials up to degree 9.
+#[test]
+fn test_gauss_legendre_x_sq() -> i64 {
+    let result: f64 = integrate_gauss_legendre_5(0.0, 1.0, sq);
+    assert abs(result - 0.3333333333333333) < 1.0e-12;
+    return 0;
+}
+
+// ∫₀^π sin(x) dx = 2.0 — adaptive trapz, tol=1e-7.
+#[test]
+fn test_adaptive_trapz_sin_pi() -> i64 {
+    let pi: f64 = 3.141592653589793;
+    let result: f64 = integrate_adaptive_trapz(0.0, pi, sin_fn, 1.0e-7);
+    assert abs(result - 2.0) < 1.0e-6;
+    return 0;
+}
+
+// ∫₀¹ 1 dx = 1.0 — constant function, exact for all methods.
+#[test]
+fn test_trapz_constant() -> i64 {
+    let n: i64 = 5;
+    let ys: Vec<f64> = vec(1.0);
+    let i: i64 = 1;
+    while i < n {
+        push(mut ref ys, 1.0);
+        i = i + 1;
+    }
+    let result: f64 = integrate_trapz(0.0, 1.0, ref ys);
+    assert abs(result - 1.0) < 1.0e-12;
+    return 0;
+}
+
+fn main() -> i64 { return 0; }

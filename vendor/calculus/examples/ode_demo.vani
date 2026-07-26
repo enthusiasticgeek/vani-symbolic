@@ -1,0 +1,43 @@
+// ODE solver demo: solve radioactive decay  dy/dt = −λy,  y(0) = 100.
+// Exact solution:  y(t) = 100 · e^(−λt).
+// Compare Euler and RK4 accuracy at selected time points.
+//
+// Run with:  vanic run examples/ode_demo.vani
+
+use "../src/lib.vani";
+
+fn decay(t: f64, y: f64) -> f64 { return 0.0 - 0.5 * y; }
+
+fn main() -> i64 {
+    let y0: f64 = 100.0;
+    let lambda: f64 = 0.5;
+    let t_end: f64 = 4.0;
+    let n: i64 = 401;                    // step size h = 0.01
+
+    // Build time grid.
+    let ts: Vec<f64> = vec(0.0);
+    let i: i64 = 1;
+    while i < n {
+        push(mut ref ts, t_end * (i as f64) / ((n - 1) as f64));
+        i = i + 1;
+    }
+
+    let euler_ys: Vec<f64> = euler_solve(y0, ref ts, decay);
+    let rk4_ys: Vec<f64> = rk4_solve(y0, ref ts, decay);
+
+    print "t      exact          euler          rk4            euler_err      rk4_err";
+
+    // Print at t = 0, 1, 2, 3, 4.
+    let j: i64 = 0;
+    while j < 5 {
+        let t_idx: i64 = j * 100;
+        let t: f64 = ts[t_idx];
+        let exact: f64 = y0 * exp(0.0 - lambda * t);
+        let eu: f64 = euler_ys[t_idx];
+        let r4: f64 = rk4_ys[t_idx];
+        print t, exact, eu, r4, abs(eu - exact), abs(r4 - exact);
+        j = j + 1;
+    }
+
+    return 0;
+}
