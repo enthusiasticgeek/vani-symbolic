@@ -4,7 +4,9 @@
 // Already available as builtins (call directly, never redeclare here):
 //   push len vec i64_to_str clone_at
 //
-// No deps (self-contained) -- see [deps] in vani.toml.
+// Production code here is self-contained (no calls into any dep). v0.3.0
+// vendors vani-calculus solely for tests/examples' cross-check against
+// diff_central -- see [deps] in vani.toml.
 //
 // ENCODING: flat arena, not a recursive enum. The obvious design --
 // `enum Expr { Add(Box<Expr>, Box<Expr>), ... }` -- does NOT compile in

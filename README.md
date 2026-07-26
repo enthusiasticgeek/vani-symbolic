@@ -1,12 +1,12 @@
 # vani-symbolic
 
 Symbolic-math (CAS) foundation for the [vāṇी compiler](https://github.com/enthusiasticgeek/vani-compiler).
-Phases 1-2 of the planned symbolic tier in
+Phases 1-3 of the planned symbolic tier in
 [kosh-index/ROADMAP.md](https://github.com/enthusiasticgeek/kosh-index/blob/main/ROADMAP.md)
 -- expression construction, numeric evaluation, precedence-aware
-printing, and simplification (constant folding, identities, like-term
-collection). No differentiation, integration, or equation solving yet;
-those are later phases.
+printing, simplification (constant folding, identities, like-term
+collection), and symbolic differentiation. No integration or equation
+solving yet; those are later phases.
 
 `ExprNode` is a plain `Copy` struct (four `i64` fields, no heap-owning
 field) living in a flat `Vec<ExprNode>` arena, unlike the owned-`Vec`
@@ -32,7 +32,7 @@ vanic add symbolic
 vanic build
 ```
 
-## What's included (v0.1.0-v0.2.0 — construction through simplification; see TODO.md)
+## What's included (v0.1.0-v0.3.0 — construction through differentiation; see TODO.md)
 
 | Module | Functions |
 |---|---|
@@ -42,6 +42,7 @@ vanic build
 | Printing | `sym_to_str` (precedence-aware, matches SymPy's `str()` spacing convention) |
 | Equality | `sym_eq_structural` (same-shape only, NOT commutative -- `1+2` and `2+1` are not equal here) |
 | Simplification | `sym_simplify` (constant folding, identities, and like-term collection for flat linear combinations of monomials -- see "Simplification scope" below; NOT general polynomial normal form) |
+| Differentiation | `sym_diff` (sum/difference/negation/product/quotient/power+chain rules -- see "Differentiation" below) |
 
 ## Encoding
 
@@ -109,11 +110,59 @@ evaluated -- correctness is validated at points where the *original*
 expression evaluates successfully, matching this ecosystem's existing
 assert-on-out-of-scope-input convention.
 
+## Differentiation
+
+`sym_diff(arena, root, var_id)` differentiates the subtree rooted at
+`root` with respect to `var_id`, appending new derivative-combinator
+nodes to the **same** arena `root` already lives in -- unlike
+`sym_simplify`'s separate-`dst` design, differentiation reuses existing
+node indices directly for any subexpression that appears unchanged in
+the derivative (e.g. `v` in the product rule's `u'*v + u*v'`), since the
+arena only ever grows and a node index stays valid forever once
+returned.
+
+One rule per node kind, covering the full kind set:
+
+| Kind | Rule |
+|---|---|
+| `Num` | `-> 0` |
+| `Var` | `-> 1` if this is `var_id`, else `-> 0` |
+| `Add(u,v)` | `-> u' + v'` |
+| `Sub(u,v)` | `-> u' - v'` |
+| `Neg(u)` | `-> -u'` |
+| `Mul(u,v)` | `-> u'*v + u*v'` (product rule) |
+| `Div(u,v)` | `-> (u'*v - u*v') / (v*v)` (quotient rule) |
+| `Pow(u,n)` | `-> n * u^(n-1) * u'` (power rule + chain rule) |
+
+`Pow`'s exponent `n` must be a literal `Num` -- a variable/expression
+exponent needs log-differentiation, out of scope (an extension of
+`sym_eval`'s existing "nonnegative integer exponent only" restriction).
+`n == 0` is a special case (`u^(n-1)` would need exponent `-1`, which
+`sym_pow` doesn't support) -- handled directly since `d(u^0)/dx =
+d(1)/dx = 0`.
+
+**Raw output is deliberately not simplified** -- `sym_diff` and
+`sym_simplify` are separate, composable passes; call `sym_simplify` on
+the result to fold `1*x`, `x+0`, `x^1`, etc. into something readable
+(see `examples/diff_demo.vani`). Note the current simplifier's
+documented scope limits (no cross-operator associativity flattening)
+mean a term like `2*(3*x^2)` from the chain rule stays as-is rather than
+folding to `6*x^2` -- see "Simplification scope" above.
+
+Validated in `tests/test_diff.vani` both by exact-structure checks per
+rule (including confirming the arena-reuse property directly) and a
+genuine cross-package check against vendored
+[vani-calculus](https://github.com/enthusiasticgeek/vani-calculus)'s
+`diff_central`: `sym_diff`'s symbolic derivative, evaluated at a point,
+compared against the numeric central-difference derivative at the same
+point. `vani-calculus` is vendored for this test/example validation
+only -- production `sym_diff` makes zero calls into it.
+
 ## What this library does NOT provide (yet)
 
-- **Differentiation, integration, equation solving.** Later phases of
-  the symbolic tier -- see kosh-index/ROADMAP.md's `vani-symbolic`
-  scoping breakdown for the full phased plan.
+- **Integration, equation solving.** Later phases of the symbolic tier
+  -- see kosh-index/ROADMAP.md's `vani-symbolic` scoping breakdown for
+  the full phased plan.
 - **General polynomial normal form.** See "Simplification scope" above.
 - **`BigInt`-backed numbers.** `Num.value` is a plain `i64` in v0.1.0,
   matching this ecosystem's narrow-then-widen precedent. The design

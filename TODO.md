@@ -159,6 +159,70 @@ associativity flattening).
 
 ---
 
+## v0.3.0 — Implemented ✓
+
+### Differentiation (1 function)
+- [x] `sym_diff(arena, root, var_id)` -- one rule per node kind, the
+      full kind set (Num/Var/Add/Sub/Neg/Mul/Div/Pow): sum, difference,
+      negation, product, quotient, and power (with chain rule via the
+      power rule -- `Pow`'s only composition point, since `ExprNode` has
+      no transcendental-function kinds yet). Appends new derivative-
+      combinator nodes to the SAME arena `root` lives in (unlike
+      `sym_simplify`'s separate-`dst` design) -- reuses existing node
+      indices directly for any subexpression unchanged in the derivative
+      (e.g. `v` in the product rule's `u'*v + u*v'`), safe because the
+      arena only ever grows. `Pow`'s exponent must be a literal `Num`
+      (variable/expression exponents need log-differentiation, out of
+      scope); `n == 0` is a special case since `u^(n-1)` would need
+      exponent `-1`. Raw output is deliberately NOT simplified --
+      `sym_simplify` is a separate, composable pass, per the plan's
+      "raw differentiation output needs the simplifier to stay
+      readable" note.
+- [x] Every local variable given a rule-specific name suffix
+      (`_add`/`_sub`/`_neg`/`_mul`/`_div`/`_pow`), even across
+      non-overlapping if-branches, to sidestep vāṇी's known LLVM
+      codegen bug where reusing one local name across sibling branches
+      of the same function can crash with "multiple definition of local
+      value" even though the branches never execute together.
+
+### Tests
+- [x] `tests/test_diff.vani` -- exact-structure checks per rule
+      (including directly asserting the arena-reuse property: a
+      derivative subterm's index equals the ORIGINAL subexpression's
+      index, not a copy), evaluation checks against hand-derived closed
+      forms (a cubic polynomial, a multivariable product+power
+      expression), a composed `sym_diff` + `sym_simplify` eval-preserving
+      check, and **the plan's own required cross-package composed
+      check**: `sym_diff`'s symbolic derivative (evaluated via
+      `sym_eval` at integer sample points) cross-checked against
+      vendored `vani-calculus`'s `diff_central` numeric derivative at
+      the same points, for both a plain polynomial and a chain-rule
+      case (`(x+1)^3`). All four run/build × backend combinations pass;
+      full SMT `vanic check` clean.
+- [x] `examples/diff_demo.vani` -- composed construction+diff+simplify+
+      eval+print check on the same `p(x) = 2x^3-3x^2+x-5` that
+      `symbolic_demo.vani` builds, demonstrating both why raw `sym_diff`
+      output needs the `sym_simplify` pass (readability) and why the
+      simplifier's own documented scope limit (no cross-operator
+      associativity flattening) still leaves e.g. `2*3*x^2` unfolded to
+      `6*x^2` -- not a bug, a known, already-documented boundary.
+
+### Dependency
+- [x] Vendored `vani-calculus` v0.3.0 via `vanic add calculus`, tests/
+      examples-only (production `sym_diff` has zero `calculus::` calls)
+      -- matches this ecosystem's established pattern of vendoring a
+      package purely to enable a cross-check test (e.g. vani-sparse
+      vendors vani-matrix the same way, for the same reason).
+
+### Safety annotations
+- [x] `sym_diff` is exempt from both `#[bounded_stack]` and `#[wcet]`
+      (recursion depth is the tree depth, a runtime value) -- confirmed
+      via `vanic audit-safety`: full clean coverage, no gap introduced.
+- [x] Full `vanic check` (real SMT verification) passes clean on every
+      test file and both examples, on both backends.
+
+---
+
 ## Future
 
 Phased breakdown (versions proposed, not committed) tracked in
@@ -166,9 +230,6 @@ Phased breakdown (versions proposed, not committed) tracked in
 `vani-symbolic` scoping section. Each phase needs its own
 confirm-before-starting, same discipline as this package itself.
 
-- **v0.3.0: Symbolic differentiation** (`sym_diff`) -- sum/product/
-  quotient/chain/power rules. Validated against `vani-calculus`'s
-  `diff_central` at sample points. Not started.
 - **v0.4.0: Basic symbolic integration** -- a fixed pattern table
   (term-by-term polynomial power rule, elementary antiderivatives, a
   few recognized `u`-substitution shapes), not a general algorithm (no
