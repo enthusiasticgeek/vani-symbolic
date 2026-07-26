@@ -1,0 +1,60 @@
+// Composed construction+diff+simplify+print+eval check, matching this
+// package's established build-order discipline (see simplify_demo.vani).
+// Differentiates the same p(x) = 2x^3 - 3x^2 + x - 5 that
+// symbolic_demo.vani builds and evaluates, so the two examples read as a
+// matched before/after pair across the construction and differentiation
+// phases: dp/dx = 6x^2 - 6x + 1.
+// Run with:  vanic run examples/diff_demo.vani
+
+use "../src/lib.vani";
+
+fn main() -> i64 {
+    let arena: Vec<ExprNode> = sym_arena_new();
+    let table: SymbolTable = symtab_new();
+
+    let x: i64 = sym_var(mut ref arena, mut ref table, "x");
+    let vid_x: i64 = symtab_intern(mut ref table, "x");
+
+    let x_cubed: i64 = sym_pow(mut ref arena, x, sym_num(mut ref arena, 3));
+    let x_squared: i64 = sym_pow(mut ref arena, x, sym_num(mut ref arena, 2));
+    let two_x3: i64 = sym_mul(mut ref arena, sym_num(mut ref arena, 2), x_cubed);
+    let three_x2: i64 = sym_mul(mut ref arena, sym_num(mut ref arena, 3), x_squared);
+
+    let step1: i64 = sym_sub(mut ref arena, two_x3, three_x2); // 2x^3 - 3x^2
+    let step2: i64 = sym_add(mut ref arena, step1, x);         // + x
+    let p: i64 = sym_sub(mut ref arena, step2, sym_num(mut ref arena, 5)); // - 5
+
+    print "p(x):";
+    print sym_to_str(ref arena, ref table, p);
+
+    // Raw sym_diff output is deliberately unsimplified -- print it once
+    // to show why the composed sym_simplify pass matters for readability.
+    let dp_raw: i64 = sym_diff(mut ref arena, p, vid_x);
+    print "dp/dx (raw):";
+    print sym_to_str(ref arena, ref table, dp_raw);
+
+    let simplified_arena: Vec<ExprNode> = sym_arena_new();
+    let dp_simplified: i64 = sym_simplify(ref arena, dp_raw, mut ref simplified_arena);
+    print "dp/dx (simplified):";
+    print sym_to_str(ref simplified_arena, ref table, dp_simplified);
+
+    // Evaluate at several points -- raw and simplified derivatives must
+    // always agree, and both must match the hand-derived closed form
+    // dp/dx = 6x^2 - 6x + 1.
+    let sample: i64 = 0 - 3;
+    while sample <= 3 {
+        let vals: Vec<i64> = vec(sample);
+        let expected: i64 = 6 * sample * sample - 6 * sample + 1;
+        let raw_val: i64 = sym_eval(ref arena, dp_raw, ref vals);
+        let simplified_val: i64 = sym_eval(ref simplified_arena, dp_simplified, ref vals);
+        assert raw_val == expected;
+        assert simplified_val == expected;
+        sample = sample + 1;
+    }
+
+    let vals_at_4: Vec<i64> = vec(4);
+    print "dp/dx at x=4:";
+    print i64_to_str(sym_eval(ref simplified_arena, dp_simplified, ref vals_at_4));
+
+    return 0;
+}
