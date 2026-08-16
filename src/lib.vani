@@ -847,3 +847,166 @@ fn sym_diff(arena: mut ref Vec<ExprNode>, root: i64, var_id: i64) -> i64 {
     let coeff_pow: i64 = sym_mul(arena, sym_num(arena, n_pow), powed_pow);
     return sym_mul(arena, coeff_pow, du_pow);
 }
+
+// ── v0.5.0: Equation solving (degree <= 2) ───────────────────────────────
+//
+// "Thin layer" per the roadmap's own risk rating -- most of the actual
+// root-finding work is already done in vani-algebra's
+// `algebra_poly_roots_real` (linear/quadratic/cubic/quartic+ real-root
+// solver), reused here rather than reimplemented. The genuinely new work
+// is extracting [c0, c1, c2] polynomial coefficients out of a symbolic
+// expression tree.
+//
+// COEFFICIENT EXTRACTION SCOPE: deliberately narrow, NOT a general
+// polynomial normalizer (that would need full expansion/collection --
+// sym_simplify's own v0.2.0 header already documents why that's out of
+// scope: "NOT general polynomial normal form"). Reuses
+// `_sym_flatten_sum` (the exact same proven Add/Sub walker
+// `sym_simplify`'s own Layer 2 uses) to un-nest the top-level sum into
+// signed terms, sym_simplify's each term individually (so e.g.
+// `(x+0)^2` reduces to `x^2` before classification, same as
+// `_sym_simplify_sum` does), then classifies each simplified term into
+// one of five recognized shapes:
+//   Num                          -> contributes to c0
+//   Var(var_id)                  -> contributes 1 to c1
+//   Mul(Num,Var)/Mul(Var,Num)    -> contributes Num to c1
+//   Pow(Var(var_id), Num=2)      -> contributes 1 to c2
+//   Mul(Num,Pow)/Mul(Pow,Num)    -> contributes Num to c2 (Pow as above)
+// Any other shape (x^3, x*y, sin(x), an unrelated variable, ...) makes
+// extraction return ok=false -- an explicit "no rule matched" signal,
+// not a guess or a silent wrong answer (same discipline v0.4.0's
+// integration pattern table already documents needing).
+
+struct SymPolyCoeffs {
+    ok: bool,
+    c0: f64,
+    c1: f64,
+    c2: f64,
+}
+
+// True if `dst[idx]` is exactly `Pow(Var(var_id), Num(2))` -- the one
+// degree-2 shape this phase recognizes (no `x^2.0`-as-float case: `Pow`'s
+// own exponent field is the same `i64` literal `_sym_ipow` already
+// requires for evaluation).
+#[bounded_stack(bytes = 154)]
+#[wcet(cycles = 85)]
+fn _sym_is_var_squared(dst: ref Vec<ExprNode>, idx: i64, var_id: i64) -> bool {
+    let node: ExprNode = dst[idx];
+    if node.kind != 6 {
+        return false;
+    }
+    let base: ExprNode = dst[node.left];
+    let exp: ExprNode = dst[node.right];
+    return base.kind == 1 && base.value == var_id && exp.kind == 0 && exp.value == 2;
+}
+
+// NO #[wcet]: recursion depth (via _sym_flatten_sum) and the number of
+// flattened terms are both runtime values.
+// WCET formula: ~30 * (number of flattened terms), plus sym_simplify's
+// own per-term cost.
+fn sym_poly_coeffs_le2(src: ref Vec<ExprNode>, root: i64, var_id: i64) -> SymPolyCoeffs {
+    let signs: Vec<i64> = vec();
+    let terms: Vec<i64> = vec();
+    _sym_flatten_sum(src, root, mut ref signs, mut ref terms, 1);
+
+    let dst: Vec<ExprNode> = sym_arena_new();
+    let c0: f64 = 0.0;
+    let c1: f64 = 0.0;
+    let c2: f64 = 0.0;
+    let n: i64 = len(ref terms) as i64;
+    let i: i64 = 0;
+    while i < n {
+        let s: f64 = signs[i] as f64;
+        let t: i64 = terms[i];
+        let simplified: i64 = sym_simplify(src, t, mut ref dst);
+        let node: ExprNode = dst[simplified];
+
+        if node.kind == 0 {
+            c0 = c0 + s * (node.value as f64);
+        } else if node.kind == 1 && node.value == var_id {
+            c1 = c1 + s;
+        } else if node.kind == 4 {
+            let lch: ExprNode = dst[node.left];
+            let rch: ExprNode = dst[node.right];
+            if lch.kind == 0 && rch.kind == 1 && rch.value == var_id {
+                c1 = c1 + s * (lch.value as f64);
+            } else if lch.kind == 1 && lch.value == var_id && rch.kind == 0 {
+                c1 = c1 + s * (rch.value as f64);
+            } else if lch.kind == 0 && _sym_is_var_squared(ref dst, node.right, var_id) {
+                c2 = c2 + s * (lch.value as f64);
+            } else if _sym_is_var_squared(ref dst, node.left, var_id) && rch.kind == 0 {
+                c2 = c2 + s * (rch.value as f64);
+            } else {
+                return SymPolyCoeffs { ok: false, c0: 0.0, c1: 0.0, c2: 0.0 };
+            }
+        } else if _sym_is_var_squared(ref dst, simplified, var_id) {
+            c2 = c2 + s;
+        } else {
+            return SymPolyCoeffs { ok: false, c0: 0.0, c1: 0.0, c2: 0.0 };
+        }
+        i = i + 1;
+    }
+    return SymPolyCoeffs { ok: true, c0: c0, c1: c1, c2: c2 };
+}
+
+// Solves p(x) = 0 for real x, where `root` is a symbolic expression of
+// degree <= 2 in `var_id` (recognized shapes per sym_poly_coeffs_le2
+// above). Returns an empty Vec if the shape isn't recognized, or if the
+// expression degenerates to a non-equation (c1 and c2 both ~0 -- either
+// no solution, if c0 != 0, or every x, if c0 == 0; neither is a finite
+// root list, so this phase reports "no roots" rather than guessing which
+// case applies). Otherwise builds the ascending-degree coefficient Vec
+// `algebra::algebra_poly_roots_real` expects and hands off to it.
+// NO #[wcet]: dominated by sym_poly_coeffs_le2's own runtime-bounded cost.
+fn sym_solve_poly_le2(src: ref Vec<ExprNode>, root: i64, var_id: i64) -> Vec<f64> {
+    let extracted: SymPolyCoeffs = sym_poly_coeffs_le2(src, root, var_id);
+    let out: Vec<f64> = vec();
+    if extracted.ok == false {
+        return out;
+    }
+    let coeffs: Vec<f64> = vec();
+    if abs(extracted.c2) > 1.0e-12 {
+        push(mut ref coeffs, extracted.c0);
+        push(mut ref coeffs, extracted.c1);
+        push(mut ref coeffs, extracted.c2);
+    } else if abs(extracted.c1) > 1.0e-12 {
+        push(mut ref coeffs, extracted.c0);
+        push(mut ref coeffs, extracted.c1);
+    } else {
+        return out;
+    }
+    return algebra::algebra_poly_roots_real(ref coeffs);
+}
+
+// Solves lhs = rhs for real x (both sides degree <= 2 in `var_id`,
+// possibly in DIFFERENT arenas -- lhs and rhs are extracted
+// independently via sym_poly_coeffs_le2, then their coefficients are
+// subtracted directly, rather than building a new Sub node in either
+// caller's arena (which would need a `mut ref` on an arena this
+// function otherwise only reads). The common real-world "equation" form
+// (something = something, not pre-arranged to "= 0") this phase's
+// roadmap entry calls for, built on top of sym_solve_poly_le2's
+// simpler single-expression core.
+fn sym_solve_equation_le2(lsrc: ref Vec<ExprNode>, lhs: i64, rsrc: ref Vec<ExprNode>, rhs: i64, var_id: i64) -> Vec<f64> {
+    let l: SymPolyCoeffs = sym_poly_coeffs_le2(lsrc, lhs, var_id);
+    let r: SymPolyCoeffs = sym_poly_coeffs_le2(rsrc, rhs, var_id);
+    let out: Vec<f64> = vec();
+    if l.ok == false || r.ok == false {
+        return out;
+    }
+    let c0: f64 = l.c0 - r.c0;
+    let c1: f64 = l.c1 - r.c1;
+    let c2: f64 = l.c2 - r.c2;
+    let coeffs: Vec<f64> = vec();
+    if abs(c2) > 1.0e-12 {
+        push(mut ref coeffs, c0);
+        push(mut ref coeffs, c1);
+        push(mut ref coeffs, c2);
+    } else if abs(c1) > 1.0e-12 {
+        push(mut ref coeffs, c0);
+        push(mut ref coeffs, c1);
+    } else {
+        return out;
+    }
+    return algebra::algebra_poly_roots_real(ref coeffs);
+}

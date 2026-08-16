@@ -1,0 +1,68 @@
+// Tests for the analytic and finite-difference nonlinear Newton system
+// solvers, against a hand-solvable system: x^2 + y^2 = 4, x = y, whose
+// solution is x = y = sqrt(2).
+// Run with:  vanic test tests/test_newton_system.vani
+
+use "../src/lib.vani";
+
+fn close(a: f64, b: f64) -> bool {
+    return abs(a - b) < 1.0e-6;
+}
+
+fn sys_F(x: ref Vec<f64>) -> Vec<f64> {
+    let out: Vec<f64> = vec();
+    push(mut ref out, x[0] * x[0] + x[1] * x[1] - 4.0);
+    push(mut ref out, x[0] - x[1]);
+    return out;
+}
+
+fn sys_J(x: ref Vec<f64>) -> Vec<f64> {
+    let out: Vec<f64> = vec();
+    push(mut ref out, 2.0 * x[0]);
+    push(mut ref out, 2.0 * x[1]);
+    push(mut ref out, 1.0);
+    push(mut ref out, 0.0 - 1.0);
+    return out;
+}
+
+fn main() -> i64 {
+    let x0: Vec<f64> = vec();
+    push(mut ref x0, 1.0);
+    push(mut ref x0, 0.5);
+
+    let sol: Vec<f64> = algebra_newton_system(sys_F, sys_J, ref x0, 2, 1.0e-10, 50);
+    assert close(sol[0], sqrt(2.0));
+    assert close(sol[1], sqrt(2.0));
+
+    let sol_fd: Vec<f64> = algebra_newton_system_fd(sys_F, ref x0, 2, 1.0e-6, 1.0e-8, 50);
+    assert abs(sol_fd[0] - sqrt(2.0)) < 1.0e-4;
+    assert abs(sol_fd[1] - sqrt(2.0)) < 1.0e-4;
+
+    // Every root the analytic solver returns must actually zero out F,
+    // checked against F itself rather than just the expected value.
+    let residual: Vec<f64> = sys_F(ref sol);
+    assert abs(residual[0]) < 1.0e-8;
+    assert abs(residual[1]) < 1.0e-8;
+
+    // algebra_newton_system_damped, from a starting guess far enough from
+    // the solution that a full undamped Newton step would badly overshoot
+    // (8, 1) -- verified by hand: this still converges to the same root,
+    // and (separately, via scratch testing during development) plain
+    // algebra_newton_system also happens to converge fine from here, so
+    // this checks the damped solver's own correctness rather than
+    // demonstrating a divergence it specifically rescues. Note: x0 with
+    // x = -y exactly makes this system's Jacobian singular (det J =
+    // -2(x+y)) regardless of which solver is used -- not a scenario
+    // either solver is expected to handle, so avoided here.
+    let x0b: Vec<f64> = vec();
+    push(mut ref x0b, 8.0);
+    push(mut ref x0b, 1.0);
+    let sol_damped: Vec<f64> = algebra_newton_system_damped(sys_F, sys_J, ref x0b, 2, 1.0e-10, 50, 30);
+    assert close(sol_damped[0], sqrt(2.0));
+    assert close(sol_damped[1], sqrt(2.0));
+    let residual_damped: Vec<f64> = sys_F(ref sol_damped);
+    assert abs(residual_damped[0]) < 1.0e-8;
+    assert abs(residual_damped[1]) < 1.0e-8;
+
+    return 0;
+}

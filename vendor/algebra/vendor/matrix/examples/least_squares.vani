@@ -1,0 +1,67 @@
+// Ordinary least squares via normal equations: β = (XᵀX)⁻¹ Xᵀy
+//
+// Fit a line y = β₀ + β₁x to 5 points.
+// Data: (1,2), (2,4), (3,5), (4,4), (5,5)
+// True OLS solution: β₀ = 2.2, β₁ = 0.6 (verified by hand via normal
+// equations [[5,15],[15,55]]β=[20,66], and by residuals summing to zero)
+//
+// Design matrix X is 5×2:  first column all 1s (intercept), second column x values.
+// X = [[1,1],[1,2],[1,3],[1,4],[1,5]]
+//
+// Run with:  vanic run examples/least_squares.vani
+
+use "../src/lib.vani";
+
+fn main() -> i64 {
+    // Build 5×2 design matrix X (intercept + slope columns)
+    let X: Vec<f64> = vec(1.0); push(mut ref X, 1.0);
+    push(mut ref X, 1.0); push(mut ref X, 2.0);
+    push(mut ref X, 1.0); push(mut ref X, 3.0);
+    push(mut ref X, 1.0); push(mut ref X, 4.0);
+    push(mut ref X, 1.0); push(mut ref X, 5.0);
+
+    // Response vector y
+    let y: Vec<f64> = vec(2.0);
+    push(mut ref y, 4.0); push(mut ref y, 5.0); push(mut ref y, 4.0); push(mut ref y, 5.0);
+
+    print "=== Least squares: y = β₀ + β₁x ===";
+    print "Data: (1,2) (2,4) (3,5) (4,4) (5,5)";
+    print "Expected: β₀ = 2.2, β₁ = 0.6";
+    print "";
+
+    // Xᵀ is 2×5, XᵀX is 2×2
+    let Xt: Vec<f64> = mat_transpose(ref X, 5, 2);
+    let XtX: Vec<f64> = mat_mul_rect(ref Xt, ref X, 2, 5, 2);
+    print "XᵀX:";
+    print " [", mat_get(ref XtX, 2, 0, 0), mat_get(ref XtX, 2, 0, 1), "]";
+    print " [", mat_get(ref XtX, 2, 1, 0), mat_get(ref XtX, 2, 1, 1), "]";
+    print "";
+
+    // Xᵀy is 2×1
+    let Xty: Vec<f64> = mat_vec_mul(ref Xt, ref y, 2, 5);
+    print "Xᵀy: [", Xty[0], ",", Xty[1], "]";
+    print "";
+
+    // β = (XᵀX)⁻¹ Xᵀy
+    let XtXinv: Vec<f64> = mat_inv_n(ref XtX, 2);
+    let beta: Vec<f64> = mat_vec_mul(ref XtXinv, ref Xty, 2, 2);
+    print "β₀ (intercept) =", beta[0], "  (expected 2.2)";
+    print "β₁ (slope)     =", beta[1], "  (expected 0.6)";
+    print "";
+
+    // Predictions ŷ = X β
+    let y_hat: Vec<f64> = mat_vec_mul(ref X, ref beta, 5, 2);
+    print "Predictions ŷ:";
+    let i: i64 = 0;
+    while i < 5 {
+        print "  x=", (i + 1) as f64, "  ŷ=", y_hat[i], "  y=", y[i];
+        i = i + 1;
+    }
+
+    // Residual norm
+    let resid: Vec<f64> = mat_sub(ref y_hat, ref y, 5, 1);
+    print "";
+    print "Residual norm ||ŷ - y|| =", vec_norm2(ref resid, 5);
+
+    return 0;
+}

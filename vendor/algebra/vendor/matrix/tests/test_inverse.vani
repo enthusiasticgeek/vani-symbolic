@@ -1,0 +1,93 @@
+// Tests for Sections 5 and 6: determinants and inverses.
+// Stubs for mat_inv_n and mat_solve are not yet implemented;
+// those assertions are marked TODO and skipped for now.
+// Run with:  vanic test tests/test_inverse.vani
+
+use "../src/lib.vani";
+
+fn close(a: f64, b: f64) -> bool {
+    return abs(a - b) < 1.0e-10;
+}
+
+fn main() -> i64 {
+    // ── 2×2 ──────────────────────────────────────────────────────────────────
+
+    // det of [[1,2],[3,4]] = 1*4 - 2*3 = -2
+    let A2: Vec<f64> = vec(1.0);
+    push(mut ref A2, 2.0); push(mut ref A2, 3.0); push(mut ref A2, 4.0);
+    assert close(mat_det_2x2(ref A2), 0.0 - 2.0);
+
+    // det of identity(2) = 1
+    let I2: Vec<f64> = mat_identity(2);
+    assert close(mat_det_2x2(ref I2), 1.0);
+
+    // inv_2x2: A × inv(A) ≈ I
+    let Ai: Vec<f64> = mat_inv_2x2(ref A2);
+    let AiA: Vec<f64> = mat_mul(ref A2, ref Ai, 2);
+    assert close(mat_get(ref AiA, 2, 0, 0), 1.0);
+    assert close(mat_get(ref AiA, 2, 0, 1), 0.0);
+    assert close(mat_get(ref AiA, 2, 1, 0), 0.0);
+    assert close(mat_get(ref AiA, 2, 1, 1), 1.0);
+
+    // singular 2×2 → zero matrix
+    let S2: Vec<f64> = vec(1.0);
+    push(mut ref S2, 2.0); push(mut ref S2, 2.0); push(mut ref S2, 4.0);
+    let Si: Vec<f64> = mat_inv_2x2(ref S2);
+    assert close(mat_get(ref Si, 2, 0, 0), 0.0);
+
+    // ── 3×3 ──────────────────────────────────────────────────────────────────
+
+    // det of [[1,2,3],[4,5,6],[7,8,10]] = -3
+    let A3: Vec<f64> = vec(1.0);
+    push(mut ref A3, 2.0); push(mut ref A3, 3.0);
+    push(mut ref A3, 4.0); push(mut ref A3, 5.0); push(mut ref A3, 6.0);
+    push(mut ref A3, 7.0); push(mut ref A3, 8.0); push(mut ref A3, 10.0);
+    assert close(mat_det_3x3(ref A3), 0.0 - 3.0);
+
+    // det of identity(3) = 1
+    let I3: Vec<f64> = mat_identity(3);
+    assert close(mat_det_3x3(ref I3), 1.0);
+
+    // inv_3x3: A3 × inv(A3) ≈ I (spot-check diagonal)
+    let A3i: Vec<f64> = mat_inv_3x3(ref A3);
+    let A3iA3: Vec<f64> = mat_mul(ref A3, ref A3i, 3);
+    assert close(mat_get(ref A3iA3, 3, 0, 0), 1.0);
+    assert close(mat_get(ref A3iA3, 3, 1, 1), 1.0);
+    assert close(mat_get(ref A3iA3, 3, 2, 2), 1.0);
+    assert close(mat_get(ref A3iA3, 3, 0, 1), 0.0);
+
+    // ── General n×n (mat_inv_n / mat_det_n / mat_solve) ────────────────────────
+    assert close(mat_det_n(ref A3, 3), 0.0 - 3.0);
+
+    let b: Vec<f64> = vec(1.0); push(mut ref b, 0.0); push(mut ref b, 0.0);
+    let x: Vec<f64> = mat_solve(ref I3, ref b, 3);
+    assert close(x[0], 1.0);
+    assert close(x[1], 0.0);
+    assert close(x[2], 0.0);
+
+    // mat_inv_n on A3: A3 × inv(A3) ≈ I
+    let A3ni: Vec<f64> = mat_inv_n(ref A3, 3);
+    let A3nA3: Vec<f64> = mat_mul(ref A3, ref A3ni, 3);
+    assert close(mat_get(ref A3nA3, 3, 0, 0), 1.0);
+    assert close(mat_get(ref A3nA3, 3, 1, 1), 1.0);
+    assert close(mat_get(ref A3nA3, 3, 2, 2), 1.0);
+    assert close(mat_get(ref A3nA3, 3, 0, 1), 0.0);
+
+    // mat_solve on the same A3 system, general n×n
+    let b3: Vec<f64> = vec(6.0); push(mut ref b3, 15.0); push(mut ref b3, 25.0);
+    let x3: Vec<f64> = mat_solve(ref A3, ref b3, 3);
+    let Ax3: Vec<f64> = mat_vec_mul(ref A3, ref x3, 3, 3);
+    assert close(Ax3[0], 6.0);
+    assert close(Ax3[1], 15.0);
+    assert close(Ax3[2], 25.0);
+
+    // singular n×n → mat_inv_n returns zeros
+    let Sn: Vec<f64> = vec(1.0);
+    push(mut ref Sn, 2.0); push(mut ref Sn, 3.0);
+    push(mut ref Sn, 2.0); push(mut ref Sn, 4.0); push(mut ref Sn, 6.0);
+    push(mut ref Sn, 1.0); push(mut ref Sn, 1.0); push(mut ref Sn, 1.0);
+    let Sni: Vec<f64> = mat_inv_n(ref Sn, 3);
+    assert close(mat_get(ref Sni, 3, 0, 0), 0.0);
+
+    return 0;
+}

@@ -1,0 +1,1000 @@
+// vani-matrix  v0.1.0 — dense linear algebra library
+//
+// ENCODING: all matrices are flat row-major Vec<f64>.
+//   Element (i, j) of an m×n matrix M: M[i * n + j]
+//   Dimension args are always explicit — no metadata hidden in the Vec.
+//
+// LU PACKED FORMAT: lu_factor returns Vec<f64> of length n*n + n.
+//   [0 .. n²-1]   — combined LU (L below diagonal, implicit 1 on diag; U on/above)
+//   [n² .. n²+n-1] — pivot row indices as f64
+//
+// BUILTINS (do NOT reimplement): abs, sqrt, pow, exp, log, sin, cos,
+//   f64_tgamma, f64_lgamma, i64_factorial, i64_binomial
+
+// ── Section 1: Constructors and accessors ─────────────────────────────────────
+
+// All-zero m×n matrix. WCET = rows×cols × 8 cycles.
+#[bounded_stack(bytes = 120)]
+fn mat_zeros(rows: i64, cols: i64) -> Vec<f64> {
+    let n: i64 = rows * cols;
+    let M: Vec<f64> = vec(0.0);
+    let i: i64 = 1;
+    while i < n { push(mut ref M, 0.0); i = i + 1; }
+    return M;
+}
+
+// All-ones m×n matrix. WCET = rows×cols × 8 cycles.
+#[bounded_stack(bytes = 120)]
+fn mat_ones(rows: i64, cols: i64) -> Vec<f64> {
+    let n: i64 = rows * cols;
+    let M: Vec<f64> = vec(1.0);
+    let i: i64 = 1;
+    while i < n { push(mut ref M, 1.0); i = i + 1; }
+    return M;
+}
+
+// n×n identity matrix. WCET = n² × 12 cycles.
+#[bounded_stack(bytes = 224)]
+fn mat_identity(n: i64) -> Vec<f64> {
+    let M: Vec<f64> = mat_zeros(n, n);
+    let i: i64 = 0;
+    while i < n { set(mut ref M, i * n + i, 1.0); i = i + 1; }
+    return M;
+}
+
+// n×n diagonal matrix from a Vec of n values. WCET = n² × 12 cycles.
+#[bounded_stack(bytes = 232)]
+fn mat_from_diag(diag: ref Vec<f64>, n: i64) -> Vec<f64> {
+    let M: Vec<f64> = mat_zeros(n, n);
+    let i: i64 = 0;
+    while i < n { set(mut ref M, i * n + i, diag[i]); i = i + 1; }
+    return M;
+}
+
+// Deep copy of an m×n matrix. WCET = rows×cols × 8 cycles.
+#[bounded_stack(bytes = 128)]
+fn mat_copy(A: ref Vec<f64>, rows: i64, cols: i64) -> Vec<f64> {
+    let n: i64 = rows * cols;
+    let M: Vec<f64> = vec(A[0]);
+    let i: i64 = 1;
+    while i < n { push(mut ref M, A[i]); i = i + 1; }
+    return M;
+}
+
+// Read element (i, j) from a matrix with `cols` columns. WCET ≈ 15 cycles.
+#[bounded_stack(bytes = 72)]
+#[wcet(cycles = 15)]
+fn mat_get(A: ref Vec<f64>, cols: i64, i: i64, j: i64) -> f64 {
+    return A[i * cols + j];
+}
+
+// Write v to element (i, j). Returns 0 (unit substitute). WCET ≈ 27 cycles.
+// Note: A must be a mut ref parameter; pass it directly to set (no extra mut ref).
+#[bounded_stack(bytes = 80)]
+#[wcet(cycles = 27)]
+fn mat_set(A: mut ref Vec<f64>, cols: i64, i: i64, j: i64, v: f64) -> i64 {
+    set(A, i * cols + j, v);
+    return 0;
+}
+
+// Extract row i from a matrix with n_cols columns. WCET = n_cols × 12 cycles.
+#[bounded_stack(bytes = 128)]
+fn mat_row(A: ref Vec<f64>, cols: i64, i: i64) -> Vec<f64> {
+    let base: i64 = i * cols;
+    let row: Vec<f64> = vec(A[base]);
+    let j: i64 = 1;
+    while j < cols { push(mut ref row, A[base + j]); j = j + 1; }
+    return row;
+}
+
+// Extract column j from an m×n matrix. WCET = rows × 12 cycles.
+#[bounded_stack(bytes = 128)]
+fn mat_col(A: ref Vec<f64>, rows: i64, cols: i64, j: i64) -> Vec<f64> {
+    let col: Vec<f64> = vec(A[j]);
+    let i: i64 = 1;
+    while i < rows { push(mut ref col, A[i * cols + j]); i = i + 1; }
+    return col;
+}
+
+// ── Section 2: Arithmetic (element-wise) ──────────────────────────────────────
+
+// Element-wise A + B. WCET = rows×cols × 10 cycles.
+#[bounded_stack(bytes = 136)]
+fn mat_add(A: ref Vec<f64>, B: ref Vec<f64>, rows: i64, cols: i64) -> Vec<f64> {
+    let n: i64 = rows * cols;
+    let C: Vec<f64> = vec(A[0] + B[0]);
+    let i: i64 = 1;
+    while i < n { push(mut ref C, A[i] + B[i]); i = i + 1; }
+    return C;
+}
+
+// Element-wise A − B. WCET = rows×cols × 10 cycles.
+#[bounded_stack(bytes = 136)]
+fn mat_sub(A: ref Vec<f64>, B: ref Vec<f64>, rows: i64, cols: i64) -> Vec<f64> {
+    let n: i64 = rows * cols;
+    let C: Vec<f64> = vec(A[0] - B[0]);
+    let i: i64 = 1;
+    while i < n { push(mut ref C, A[i] - B[i]); i = i + 1; }
+    return C;
+}
+
+// Scalar multiply: every element of A times s. WCET = rows×cols × 8 cycles.
+#[bounded_stack(bytes = 136)]
+fn mat_scale(A: ref Vec<f64>, rows: i64, cols: i64, s: f64) -> Vec<f64> {
+    let n: i64 = rows * cols;
+    let C: Vec<f64> = vec(A[0] * s);
+    let i: i64 = 1;
+    while i < n { push(mut ref C, A[i] * s); i = i + 1; }
+    return C;
+}
+
+// Element-wise product (Hadamard): C[k] = A[k] × B[k]. WCET = rows×cols × 8 cycles.
+#[bounded_stack(bytes = 136)]
+fn mat_hadamard(A: ref Vec<f64>, B: ref Vec<f64>, rows: i64, cols: i64) -> Vec<f64> {
+    let n: i64 = rows * cols;
+    let C: Vec<f64> = vec(A[0] * B[0]);
+    let i: i64 = 1;
+    while i < n { push(mut ref C, A[i] * B[i]); i = i + 1; }
+    return C;
+}
+
+// Transpose: rows×cols A → cols×rows result. T[j*rows+i] = A[i*cols+j].
+// WCET = rows×cols × 12 cycles.
+#[bounded_stack(bytes = 264)]
+fn mat_transpose(A: ref Vec<f64>, rows: i64, cols: i64) -> Vec<f64> {
+    let T: Vec<f64> = mat_zeros(cols, rows);
+    let i: i64 = 0;
+    while i < rows {
+        let j: i64 = 0;
+        while j < cols {
+            let idx_t: i64 = j * rows + i;
+            set(mut ref T, idx_t, A[i * cols + j]);
+            j = j + 1;
+        }
+        i = i + 1;
+    }
+    return T;
+}
+
+// ── Section 3: Vector ops and norms ───────────────────────────────────────────
+
+// Dot product of the first n elements of x and y. WCET = n × 10 cycles.
+// Named dot_n to avoid conflict with the vāṇī compiler builtin vec_dot(x,y).
+#[bounded_stack(bytes = 96)]
+fn dot_n(x: ref Vec<f64>, y: ref Vec<f64>, n: i64) -> f64 {
+    let s: f64 = 0.0;
+    let i: i64 = 0;
+    while i < n { s = s + x[i] * y[i]; i = i + 1; }
+    return s;
+}
+
+// Euclidean norm of the first n elements of x: sqrt(Σ xᵢ²). WCET = n × 10 + sqrt.
+#[bounded_stack(bytes = 152)]
+fn vec_norm2(x: ref Vec<f64>, n: i64) -> f64 {
+    return sqrt(dot_n(x, x, n));
+}
+
+// Outer product: m-Vec x, n-Vec y → m×n matrix R[i*n+j] = x[i]*y[j].
+// WCET = m×n × 10 cycles.
+#[bounded_stack(bytes = 264)]
+fn vec_outer(x: ref Vec<f64>, y: ref Vec<f64>, m: i64, n: i64) -> Vec<f64> {
+    let R: Vec<f64> = mat_zeros(m, n);
+    let i: i64 = 0;
+    while i < m {
+        let j: i64 = 0;
+        while j < n {
+            set(mut ref R, i * n + j, x[i] * y[j]);
+            j = j + 1;
+        }
+        i = i + 1;
+    }
+    return R;
+}
+
+// Frobenius norm: sqrt(Σ A[k]²). WCET = rows×cols × 12 cycles.
+#[bounded_stack(bytes = 104)]
+fn mat_norm_fro(A: ref Vec<f64>, rows: i64, cols: i64) -> f64 {
+    let n: i64 = rows * cols;
+    let s: f64 = 0.0;
+    let i: i64 = 0;
+    while i < n { s = s + A[i] * A[i]; i = i + 1; }
+    return sqrt(s);
+}
+
+// Max absolute entry. WCET = rows×cols × 8 cycles.
+#[bounded_stack(bytes = 112)]
+fn mat_norm_max(A: ref Vec<f64>, rows: i64, cols: i64) -> f64 {
+    let n: i64 = rows * cols;
+    let m: f64 = abs(A[0]);
+    let i: i64 = 1;
+    while i < n {
+        let v: f64 = abs(A[i]);
+        if v > m { m = v; }
+        i = i + 1;
+    }
+    return m;
+}
+
+// ── Section 4: Multiplication ──────────────────────────────────────────────────
+
+// Square n×n matrix multiply: C = A × B. WCET = n³ × 10 cycles.
+#[bounded_stack(bytes = 288)]
+fn mat_mul(A: ref Vec<f64>, B: ref Vec<f64>, n: i64) -> Vec<f64> {
+    let C: Vec<f64> = mat_zeros(n, n);
+    let i: i64 = 0;
+    while i < n {
+        let j: i64 = 0;
+        while j < n {
+            let s: f64 = 0.0;
+            let k: i64 = 0;
+            while k < n { s = s + A[i * n + k] * B[k * n + j]; k = k + 1; }
+            set(mut ref C, i * n + j, s);
+            j = j + 1;
+        }
+        i = i + 1;
+    }
+    return C;
+}
+
+// Rectangular multiply: (m×k) × (k×n) → (m×n). WCET = m×k×n × 10 cycles.
+#[bounded_stack(bytes = 304)]
+fn mat_mul_rect(A: ref Vec<f64>, B: ref Vec<f64>, m: i64, k: i64, n: i64) -> Vec<f64> {
+    let C: Vec<f64> = mat_zeros(m, n);
+    let i: i64 = 0;
+    while i < m {
+        let j: i64 = 0;
+        while j < n {
+            let s: f64 = 0.0;
+            let l: i64 = 0;
+            while l < k { s = s + A[i * k + l] * B[l * n + j]; l = l + 1; }
+            set(mut ref C, i * n + j, s);
+            j = j + 1;
+        }
+        i = i + 1;
+    }
+    return C;
+}
+
+// Matrix-vector multiply: (m×n) × (n-Vec) → (m-Vec). WCET = m×n × 10 cycles.
+#[bounded_stack(bytes = 160)]
+fn mat_vec_mul(A: ref Vec<f64>, x: ref Vec<f64>, m: i64, n: i64) -> Vec<f64> {
+    let y: Vec<f64> = vec(0.0);
+    let i: i64 = 0;
+    while i < m {
+        let s: f64 = 0.0;
+        let j: i64 = 0;
+        while j < n { s = s + A[i * n + j] * x[j]; j = j + 1; }
+        if i == 0 { set(mut ref y, 0, s); } else { push(mut ref y, s); }
+        i = i + 1;
+    }
+    return y;
+}
+
+// Integer matrix power: A^p for p ≥ 0. p=0 returns identity. O(n³ log p).
+// Repeated squaring: result accumulates base^(2^k) for each set bit of p.
+#[bounded_stack(bytes = 504)]
+fn mat_pow_n(A: ref Vec<f64>, n: i64, p: i64) -> Vec<f64> {
+    if p == 0 { return mat_identity(n); }
+    let result: Vec<f64> = mat_identity(n);
+    let base: Vec<f64> = mat_copy(A, n, n);
+    let e: i64 = p;
+    while e > 0 {
+        if e % 2 == 1 { result = mat_mul(ref result, ref base, n); }
+        base = mat_mul(ref base, ref base, n);
+        e = e / 2;
+    }
+    return result;
+}
+
+// ── Section 5: 2×2 and 3×3 closed-form ───────────────────────────────────────
+
+// Determinant of a 2×2 matrix [a b; c d]. WCET ≈ 27 cycles.
+#[bounded_stack(bytes = 48)]
+#[wcet(cycles = 27)]
+fn mat_det_2x2(A: ref Vec<f64>) -> f64 {
+    return A[0] * A[3] - A[1] * A[2];
+}
+
+// Inverse of a 2×2 matrix. Returns zero matrix if |det| < 1e-14.
+// WCET ≈ 32 cycles. (No #[wcet]: calls mat_zeros, whose loop bound is a
+// runtime parameter, so the static estimator can't prove a finite bound.)
+#[bounded_stack(bytes = 248)]
+fn mat_inv_2x2(A: ref Vec<f64>) -> Vec<f64> {
+    let d: f64 = mat_det_2x2(A);
+    if abs(d) < 1.0e-14 { return mat_zeros(2, 2); }
+    let inv: f64 = 1.0 / d;
+    let R: Vec<f64> = vec(A[3] * inv);
+    push(mut ref R, 0.0 - A[1] * inv);
+    push(mut ref R, 0.0 - A[2] * inv);
+    push(mut ref R, A[0] * inv);
+    return R;
+}
+
+// Determinant of a 3×3 matrix via cofactor expansion along row 0.
+// WCET ≈ 102 cycles.
+#[bounded_stack(bytes = 120)]
+#[wcet(cycles = 102)]
+fn mat_det_3x3(A: ref Vec<f64>) -> f64 {
+    let a: f64 = A[0]; let b: f64 = A[1]; let c: f64 = A[2];
+    let d: f64 = A[3]; let e: f64 = A[4]; let f: f64 = A[5];
+    let g: f64 = A[6]; let h: f64 = A[7]; let k: f64 = A[8];
+    return a * (e * k - f * h) - b * (d * k - f * g) + c * (d * h - e * g);
+}
+
+// Inverse of a 3×3 matrix via adjugate / det. Returns zeros if |det| < 1e-14.
+// WCET ≈ 160 cycles. (No #[wcet]: calls mat_zeros, whose loop bound is a
+// runtime parameter, so the static estimator can't prove a finite bound.)
+#[bounded_stack(bytes = 320)]
+fn mat_inv_3x3(A: ref Vec<f64>) -> Vec<f64> {
+    let d: f64 = mat_det_3x3(A);
+    if abs(d) < 1.0e-14 { return mat_zeros(3, 3); }
+    let inv: f64 = 1.0 / d;
+    let a: f64 = A[0]; let b: f64 = A[1]; let c: f64 = A[2];
+    let p: f64 = A[3]; let q: f64 = A[4]; let r: f64 = A[5];
+    let u: f64 = A[6]; let v: f64 = A[7]; let w: f64 = A[8];
+    let R: Vec<f64> = vec((q * w - r * v) * inv);
+    push(mut ref R, (0.0 - (b * w - c * v)) * inv);
+    push(mut ref R, (b * r - c * q) * inv);
+    push(mut ref R, (0.0 - (p * w - r * u)) * inv);
+    push(mut ref R, (a * w - c * u) * inv);
+    push(mut ref R, (0.0 - (a * r - c * p)) * inv);
+    push(mut ref R, (p * v - q * u) * inv);
+    push(mut ref R, (0.0 - (a * v - b * u)) * inv);
+    push(mut ref R, (a * q - b * p) * inv);
+    return R;
+}
+
+// ── Section 6: General n×n (Gauss-Jordan with partial pivoting) ───────────────
+
+// n×n matrix inverse via Gauss-Jordan on augmented [A | I].
+// Returns n×n zero matrix if A is singular (pivot < 1e-12).
+// WCET = n³ × 40 cycles.
+#[bounded_stack(bytes = 496)]
+fn mat_inv_n(A: ref Vec<f64>, n: i64) -> Vec<f64> {
+    let w: i64 = 2 * n;
+    let aug: Vec<f64> = mat_zeros(n, w);
+    let i: i64 = 0;
+    while i < n {
+        let j: i64 = 0;
+        while j < n { set(mut ref aug, i * w + j, A[i * n + j]); j = j + 1; }
+        set(mut ref aug, i * w + n + i, 1.0);
+        i = i + 1;
+    }
+
+    let col: i64 = 0;
+    while col < n {
+        let pivot_row: i64 = col;
+        let pivot_val: f64 = abs(aug[col * w + col]);
+        let r: i64 = col + 1;
+        while r < n {
+            let v: f64 = abs(aug[r * w + col]);
+            if v > pivot_val { pivot_val = v; pivot_row = r; }
+            r = r + 1;
+        }
+        if pivot_val < 1.0e-12 { return mat_zeros(n, n); }
+
+        if pivot_row != col {
+            let k: i64 = 0;
+            while k < w {
+                let tmp: f64 = aug[col * w + k];
+                set(mut ref aug, col * w + k, aug[pivot_row * w + k]);
+                set(mut ref aug, pivot_row * w + k, tmp);
+                k = k + 1;
+            }
+        }
+
+        let pv: f64 = aug[col * w + col];
+        let k2: i64 = 0;
+        while k2 < w { set(mut ref aug, col * w + k2, aug[col * w + k2] / pv); k2 = k2 + 1; }
+
+        let r2: i64 = 0;
+        while r2 < n {
+            if r2 != col {
+                let factor: f64 = aug[r2 * w + col];
+                let k3: i64 = 0;
+                while k3 < w {
+                    set(mut ref aug, r2 * w + k3, aug[r2 * w + k3] - factor * aug[col * w + k3]);
+                    k3 = k3 + 1;
+                }
+            }
+            r2 = r2 + 1;
+        }
+        col = col + 1;
+    }
+
+    let inv: Vec<f64> = mat_zeros(n, n);
+    let ii: i64 = 0;
+    while ii < n {
+        let jj: i64 = 0;
+        while jj < n { set(mut ref inv, ii * n + jj, aug[ii * w + n + jj]); jj = jj + 1; }
+        ii = ii + 1;
+    }
+    return inv;
+}
+
+// Determinant via LU decomposition.
+// WCET dominated by lu_factor: n³ × 20 cycles.
+#[bounded_stack(bytes = 512)]
+fn mat_det_n(A: ref Vec<f64>, n: i64) -> f64 {
+    let packed: Vec<f64> = lu_factor(A, n);
+    return lu_det(ref packed, n);
+}
+
+// Solve Ax = b for x via Gauss-Jordan augmented [A | b].
+// Returns n-Vec zero if A is singular.
+// WCET = n³ × 40 cycles.
+#[bounded_stack(bytes = 488)]
+fn mat_solve(A: ref Vec<f64>, b: ref Vec<f64>, n: i64) -> Vec<f64> {
+    let w: i64 = n + 1;
+    let aug: Vec<f64> = mat_zeros(n, w);
+    let i: i64 = 0;
+    while i < n {
+        let j: i64 = 0;
+        while j < n { set(mut ref aug, i * w + j, A[i * n + j]); j = j + 1; }
+        set(mut ref aug, i * w + n, b[i]);
+        i = i + 1;
+    }
+
+    let col: i64 = 0;
+    while col < n {
+        let pivot_row: i64 = col;
+        let pivot_val: f64 = abs(aug[col * w + col]);
+        let r: i64 = col + 1;
+        while r < n {
+            let v: f64 = abs(aug[r * w + col]);
+            if v > pivot_val { pivot_val = v; pivot_row = r; }
+            r = r + 1;
+        }
+        if pivot_val < 1.0e-12 { return mat_zeros(n, 1); }
+
+        if pivot_row != col {
+            let k: i64 = 0;
+            while k < w {
+                let tmp: f64 = aug[col * w + k];
+                set(mut ref aug, col * w + k, aug[pivot_row * w + k]);
+                set(mut ref aug, pivot_row * w + k, tmp);
+                k = k + 1;
+            }
+        }
+
+        let pv: f64 = aug[col * w + col];
+        let k2: i64 = 0;
+        while k2 < w { set(mut ref aug, col * w + k2, aug[col * w + k2] / pv); k2 = k2 + 1; }
+
+        let r2: i64 = 0;
+        while r2 < n {
+            if r2 != col {
+                let factor: f64 = aug[r2 * w + col];
+                let k3: i64 = 0;
+                while k3 < w {
+                    set(mut ref aug, r2 * w + k3, aug[r2 * w + k3] - factor * aug[col * w + k3]);
+                    k3 = k3 + 1;
+                }
+            }
+            r2 = r2 + 1;
+        }
+        col = col + 1;
+    }
+
+    let x: Vec<f64> = vec(aug[n]);
+    let ii: i64 = 1;
+    while ii < n { push(mut ref x, aug[ii * w + n]); ii = ii + 1; }
+    return x;
+}
+
+// ── Section 7: LU decomposition (Doolittle, partial pivoting) ─────────────────
+//
+// Packed output layout (length n²+n):
+//   [0 .. n²-1]    combined LU: L below diagonal (implicit 1s), U on/above
+//   [n² .. n²+n-1] pivot row indices as f64
+
+// Factor A = P L U (Doolittle, partial pivoting). Returns packed Vec of length n²+n:
+// [0..n²-1] combined LU, [n²..n²+n-1] pivot row index used at each step k.
+// WCET = n³ × 20 cycles.
+#[bounded_stack(bytes = 432)]
+fn lu_factor(A: ref Vec<f64>, n: i64) -> Vec<f64> {
+    let LU: Vec<f64> = mat_copy(A, n, n);
+    let piv: Vec<f64> = mat_zeros(1, n);
+
+    let k: i64 = 0;
+    while k < n {
+        let pivot_row: i64 = k;
+        let pivot_val: f64 = abs(LU[k * n + k]);
+        let r: i64 = k + 1;
+        while r < n {
+            let v: f64 = abs(LU[r * n + k]);
+            if v > pivot_val { pivot_val = v; pivot_row = r; }
+            r = r + 1;
+        }
+        set(mut ref piv, k, pivot_row as f64);
+
+        if pivot_row != k {
+            let c: i64 = 0;
+            while c < n {
+                let tmp: f64 = LU[k * n + c];
+                set(mut ref LU, k * n + c, LU[pivot_row * n + c]);
+                set(mut ref LU, pivot_row * n + c, tmp);
+                c = c + 1;
+            }
+        }
+
+        let diag: f64 = LU[k * n + k];
+        if abs(diag) > 1.0e-14 {
+            let i2: i64 = k + 1;
+            while i2 < n {
+                let factor: f64 = LU[i2 * n + k] / diag;
+                set(mut ref LU, i2 * n + k, factor);
+                let j2: i64 = k + 1;
+                while j2 < n {
+                    set(mut ref LU, i2 * n + j2, LU[i2 * n + j2] - factor * LU[k * n + j2]);
+                    j2 = j2 + 1;
+                }
+                i2 = i2 + 1;
+            }
+        }
+        k = k + 1;
+    }
+
+    let packed: Vec<f64> = mat_copy(ref LU, n, n);
+    let idx: i64 = 0;
+    while idx < n { push(mut ref packed, piv[idx]); idx = idx + 1; }
+    return packed;
+}
+
+// Determinant from lu_factor output: product of U diagonal × (−1)^{swap_count}.
+// WCET = n × 8 cycles.
+#[bounded_stack(bytes = 136)]
+fn lu_det(lu_packed: ref Vec<f64>, n: i64) -> f64 {
+    let d: f64 = 1.0;
+    let i: i64 = 0;
+    while i < n { d = d * lu_packed[i * n + i]; i = i + 1; }
+
+    let swaps: i64 = 0;
+    let k: i64 = 0;
+    while k < n {
+        let p: i64 = lu_packed[n * n + k] as i64;
+        if p != k { swaps = swaps + 1; }
+        k = k + 1;
+    }
+    if swaps % 2 == 1 { d = 0.0 - d; }
+    return d;
+}
+
+// Solve Ax=b given lu_factor output. Applies pivots, forward sub (L), back sub (U).
+// WCET = n² × 10 cycles.
+#[bounded_stack(bytes = 384)]
+fn lu_solve(lu_packed: ref Vec<f64>, b: ref Vec<f64>, n: i64) -> Vec<f64> {
+    let y: Vec<f64> = mat_copy(b, 1, n);
+    let k: i64 = 0;
+    while k < n {
+        let p: i64 = lu_packed[n * n + k] as i64;
+        if p != k {
+            let tmp: f64 = y[k];
+            set(mut ref y, k, y[p]);
+            set(mut ref y, p, tmp);
+        }
+        k = k + 1;
+    }
+
+    let i: i64 = 1;
+    while i < n {
+        let s: f64 = y[i];
+        let j: i64 = 0;
+        while j < i { s = s - lu_packed[i * n + j] * y[j]; j = j + 1; }
+        set(mut ref y, i, s);
+        i = i + 1;
+    }
+
+    let x: Vec<f64> = mat_copy(ref y, 1, n);
+    let ii: i64 = n - 1;
+    while ii >= 0 {
+        let s2: f64 = x[ii];
+        let jj: i64 = ii + 1;
+        while jj < n { s2 = s2 - lu_packed[ii * n + jj] * x[jj]; jj = jj + 1; }
+        set(mut ref x, ii, s2 / lu_packed[ii * n + ii]);
+        ii = ii - 1;
+    }
+    return x;
+}
+
+// ── Section 8: Cholesky decomposition (symmetric positive-definite) ───────────
+
+// Cholesky factorisation (Cholesky-Banachiewicz): A = L Lᵀ for symmetric
+// positive-definite A. Returns lower-triangular L (n×n flat). Returns zero
+// matrix if A is not SPD (a diagonal term of L would be sqrt of a
+// non-positive number). WCET = n³/3 × 16 cycles.
+#[bounded_stack(bytes = 304)]
+fn cholesky_factor(A: ref Vec<f64>, n: i64) -> Vec<f64> {
+    let L: Vec<f64> = mat_zeros(n, n);
+    let i: i64 = 0;
+    while i < n {
+        let j: i64 = 0;
+        while j <= i {
+            let s: f64 = A[i * n + j];
+            let k: i64 = 0;
+            while k < j { s = s - L[i * n + k] * L[j * n + k]; k = k + 1; }
+            if i == j {
+                if s <= 0.0 { return mat_zeros(n, n); }
+                set(mut ref L, i * n + j, sqrt(s));
+            } else {
+                set(mut ref L, i * n + j, s / L[j * n + j]);
+            }
+            j = j + 1;
+        }
+        i = i + 1;
+    }
+    return L;
+}
+
+// Solve Ax=b given Cholesky factor L (A=LLᵀ).
+// Forward substitution Ly=b, back substitution Lᵀx=y. WCET = n² × 10 cycles.
+#[bounded_stack(bytes = 352)]
+fn cholesky_solve(L: ref Vec<f64>, b: ref Vec<f64>, n: i64) -> Vec<f64> {
+    let y: Vec<f64> = mat_copy(b, 1, n);
+    let i: i64 = 0;
+    while i < n {
+        let s: f64 = y[i];
+        let j: i64 = 0;
+        while j < i { s = s - L[i * n + j] * y[j]; j = j + 1; }
+        set(mut ref y, i, s / L[i * n + i]);
+        i = i + 1;
+    }
+
+    let x: Vec<f64> = mat_copy(ref y, 1, n);
+    let ii: i64 = n - 1;
+    while ii >= 0 {
+        let s2: f64 = x[ii];
+        let jj: i64 = ii + 1;
+        while jj < n { s2 = s2 - L[jj * n + ii] * x[jj]; jj = jj + 1; }
+        set(mut ref x, ii, s2 / L[ii * n + ii]);
+        ii = ii - 1;
+    }
+    return x;
+}
+
+// ── Section 9: Eigenvalues, condition number, QR, SVD bidiagonalization (v0.2.0) ──
+
+// Dominant eigenvalue/eigenvector of a (typically symmetric) matrix via power
+// iteration from a uniform start. Returns a packed Vec of length n+1: element 0
+// is the eigenvalue (via the Rayleigh quotient, so the sign is correct even
+// though the iterate itself oscillates in sign when the dominant eigenvalue is
+// negative), elements [1..n+1) are the unit eigenvector. WCET = max_iter x n^2 x 12 cycles.
+#[bounded_stack(bytes = 504)]
+fn mat_eig_power(A: ref Vec<f64>, n: i64, max_iter: i64, tol: f64) -> Vec<f64> {
+    // Start from [1, 2, ..., n] normalized rather than a uniform vector --
+    // a uniform start can land exactly on a non-dominant eigenvector of a
+    // symmetric matrix (this happens in practice after mat_eig_deflate on a
+    // symmetric input), which stalls convergence to the wrong eigenvalue.
+    let v: Vec<f64> = vec();
+    let i: i64 = 0;
+    while i < n {
+        push(mut ref v, (i + 1) as f64);
+        i = i + 1;
+    }
+    let v0_norm: f64 = vec_norm2(ref v, n);
+    let i0: i64 = 0;
+    while i0 < n {
+        set(mut ref v, i0, v[i0] / v0_norm);
+        i0 = i0 + 1;
+    }
+    let iter: i64 = 0;
+    while iter < max_iter {
+        let w: Vec<f64> = mat_vec_mul(A, ref v, n, n);
+        let norm: f64 = vec_norm2(ref w, n);
+        if norm < 1.0e-300 { break; }
+        let j: i64 = 0;
+        let diff_same: f64 = 0.0;
+        let diff_flip: f64 = 0.0;
+        while j < n {
+            let nv: f64 = w[j] / norm;
+            let d1: f64 = nv - v[j];
+            let d2: f64 = nv + v[j];
+            diff_same = diff_same + d1 * d1;
+            diff_flip = diff_flip + d2 * d2;
+            set(mut ref v, j, nv);
+            j = j + 1;
+        }
+        // Handle oscillation for negative dominant eigenvalues: converged if
+        // the vector settles to the same direction OR its negation.
+        if sqrt(diff_same) < tol || sqrt(diff_flip) < tol { break; }
+        iter = iter + 1;
+    }
+    let Av: Vec<f64> = mat_vec_mul(A, ref v, n, n);
+    let lambda: f64 = dot_n(ref Av, ref v, n);
+    let out: Vec<f64> = vec(lambda);
+    let k: i64 = 0;
+    while k < n {
+        push(mut ref out, v[k]);
+        k = k + 1;
+    }
+    return out;
+}
+
+// Deflate a matrix by removing the variance already captured by eigenpair
+// (lambda, v) (v assumed a unit eigenvector): A' = A - lambda v v^T. Run
+// mat_eig_power again on the result to get the next eigenpair. WCET = n^2 x 12 cycles.
+#[bounded_stack(bytes = 416)]
+fn mat_eig_deflate(A: ref Vec<f64>, n: i64, lambda: f64, v: ref Vec<f64>) -> Vec<f64> {
+    let outer: Vec<f64> = vec_outer(v, v, n, n);
+    let out: Vec<f64> = vec();
+    let i: i64 = 0;
+    while i < n * n {
+        push(mut ref out, A[i] - lambda * outer[i]);
+        i = i + 1;
+    }
+    return out;
+}
+
+// Condition number via power iteration on A and on A^-1:
+// cond(A) = |lambda_max(A)| / |lambda_min(A)| = |lambda_max(A)| x |lambda_max(A^-1)|.
+// Assumes a diagonalizable (typically symmetric) A with real eigenvalues -- for
+// general matrices the true condition number uses singular values, not
+// eigenvalues. Returns f64_inf() if A is (numerically) singular.
+#[bounded_stack(bytes = 672)]
+fn mat_cond(A: ref Vec<f64>, n: i64) -> f64 {
+    let max_iter: i64 = 500;
+    let tol: f64 = 1.0e-10;
+    let eig_max: Vec<f64> = mat_eig_power(A, n, max_iter, tol);
+    let A_inv: Vec<f64> = mat_inv_n(A, n);
+    let eig_min_inv: Vec<f64> = mat_eig_power(ref A_inv, n, max_iter, tol);
+    let lambda_max: f64 = abs(eig_max[0]);
+    let lambda_min_inv: f64 = abs(eig_min_inv[0]);
+    if lambda_min_inv < 1.0e-300 { return f64_inf(); }
+    return lambda_max * lambda_min_inv;
+}
+
+// QR decomposition via Householder reflectors: A (m x n, m >= n typical) -> Q
+// (m x m orthogonal), R (m x n upper triangular), A = QR. Packed return: Q
+// (m*m elements) followed by R (m*n elements). Validated against the
+// canonical 3x3 Householder QR example (Q orthogonal, R upper triangular,
+// QR reconstructs A exactly) -- the sign of the last reflector's column can
+// differ from other references' choice of convention; both are valid QR
+// factorizations of the same A. WCET ~ n^2(3m-n)/3 x 20 cycles (standard
+// Householder QR operation count).
+#[bounded_stack(bytes = 744)]
+fn mat_qr_householder(A: ref Vec<f64>, m: i64, n: i64) -> Vec<f64> {
+    let R: Vec<f64> = mat_copy(A, m, n);
+    let Q: Vec<f64> = mat_identity(m);
+
+    let k_max: i64 = m;
+    if n < m { k_max = n; }
+
+    let k: i64 = 0;
+    while k < k_max {
+        let sub_len: i64 = m - k;
+        if sub_len > 1 {
+            let x: Vec<f64> = vec();
+            let i: i64 = k;
+            while i < m {
+                push(mut ref x, R[i * n + k]);
+                i = i + 1;
+            }
+            let x_norm: f64 = vec_norm2(ref x, sub_len);
+            if x_norm > 1.0e-14 {
+                let sign_x0: f64 = 1.0;
+                if x[0] < 0.0 { sign_x0 = 0.0 - 1.0; }
+                let alpha: f64 = (0.0 - sign_x0) * x_norm;
+                let v: Vec<f64> = vec();
+                let j: i64 = 0;
+                while j < sub_len {
+                    let vj: f64 = x[j];
+                    if j == 0 { vj = vj - alpha; }
+                    push(mut ref v, vj);
+                    j = j + 1;
+                }
+                let v_norm: f64 = vec_norm2(ref v, sub_len);
+                if v_norm > 1.0e-14 {
+                    let jj: i64 = 0;
+                    while jj < sub_len {
+                        set(mut ref v, jj, v[jj] / v_norm);
+                        jj = jj + 1;
+                    }
+                    // Apply H = I - 2vv^T to R[k:m, k:n] from the left.
+                    let c: i64 = k;
+                    while c < n {
+                        let d: f64 = 0.0;
+                        let r: i64 = 0;
+                        while r < sub_len {
+                            d = d + v[r] * R[(k + r) * n + c];
+                            r = r + 1;
+                        }
+                        let r2: i64 = 0;
+                        while r2 < sub_len {
+                            let idx: i64 = (k + r2) * n + c;
+                            set(mut ref R, idx, R[idx] - 2.0 * d * v[r2]);
+                            r2 = r2 + 1;
+                        }
+                        c = c + 1;
+                    }
+                    // Accumulate Q = Q * H (apply H to Q's columns [k:m) for every row).
+                    let row: i64 = 0;
+                    while row < m {
+                        let d2: f64 = 0.0;
+                        let s: i64 = 0;
+                        while s < sub_len {
+                            d2 = d2 + Q[row * m + (k + s)] * v[s];
+                            s = s + 1;
+                        }
+                        let s2: i64 = 0;
+                        while s2 < sub_len {
+                            let idx2: i64 = row * m + (k + s2);
+                            set(mut ref Q, idx2, Q[idx2] - 2.0 * d2 * v[s2]);
+                            s2 = s2 + 1;
+                        }
+                        row = row + 1;
+                    }
+                }
+            }
+        }
+        k = k + 1;
+    }
+
+    let out: Vec<f64> = vec();
+    let ii: i64 = 0;
+    while ii < m * m { push(mut ref out, Q[ii]); ii = ii + 1; }
+    let jj2: i64 = 0;
+    while jj2 < m * n { push(mut ref out, R[jj2]); jj2 = jj2 + 1; }
+    return out;
+}
+
+// Golub-Kahan bidiagonalization: A (m x n, m >= n) -> U (m x m orthogonal), B
+// (m x n bidiagonal -- nonzero only on the diagonal and first superdiagonal),
+// V (n x n orthogonal), such that A = U B V^T. This is the bidiagonalization
+// STEP toward a full SVD, not a full SVD solver -- diagonalizing B further
+// requires an iterative (implicit-shift QR) sweep on top of this, which is
+// intentionally out of scope here. Packed return: U (m*m) ++ B (m*n) ++ V (n*n).
+// Validated via reconstruction (U B V^T = A) and orthogonality (U^T U = I,
+// V^T V = I) on a 4x3 example. WCET: two interleaved Householder passes,
+// O(mn^2) overall.
+#[bounded_stack(bytes = 1072)]
+fn mat_svd_bidiag(A: ref Vec<f64>, m: i64, n: i64) -> Vec<f64> {
+    let B: Vec<f64> = mat_copy(A, m, n);
+    let U: Vec<f64> = mat_identity(m);
+    let V: Vec<f64> = mat_identity(n);
+
+    let k: i64 = 0;
+    while k < n {
+        // --- Left reflector: zero B[k+1:m, k] ---
+        let sub_len: i64 = m - k;
+        if sub_len > 1 {
+            let x: Vec<f64> = vec();
+            let i: i64 = k;
+            while i < m {
+                push(mut ref x, B[i * n + k]);
+                i = i + 1;
+            }
+            let x_norm: f64 = vec_norm2(ref x, sub_len);
+            if x_norm > 1.0e-14 {
+                let sign_x0: f64 = 1.0;
+                if x[0] < 0.0 { sign_x0 = 0.0 - 1.0; }
+                let alpha: f64 = (0.0 - sign_x0) * x_norm;
+                let v: Vec<f64> = vec();
+                let j: i64 = 0;
+                while j < sub_len {
+                    let vj: f64 = x[j];
+                    if j == 0 { vj = vj - alpha; }
+                    push(mut ref v, vj);
+                    j = j + 1;
+                }
+                let v_norm: f64 = vec_norm2(ref v, sub_len);
+                if v_norm > 1.0e-14 {
+                    let jj: i64 = 0;
+                    while jj < sub_len {
+                        set(mut ref v, jj, v[jj] / v_norm);
+                        jj = jj + 1;
+                    }
+                    let c: i64 = k;
+                    while c < n {
+                        let d: f64 = 0.0;
+                        let r: i64 = 0;
+                        while r < sub_len {
+                            d = d + v[r] * B[(k + r) * n + c];
+                            r = r + 1;
+                        }
+                        let r2: i64 = 0;
+                        while r2 < sub_len {
+                            let idx: i64 = (k + r2) * n + c;
+                            set(mut ref B, idx, B[idx] - 2.0 * d * v[r2]);
+                            r2 = r2 + 1;
+                        }
+                        c = c + 1;
+                    }
+                    let row: i64 = 0;
+                    while row < m {
+                        let d2: f64 = 0.0;
+                        let s: i64 = 0;
+                        while s < sub_len {
+                            d2 = d2 + U[row * m + (k + s)] * v[s];
+                            s = s + 1;
+                        }
+                        let s2: i64 = 0;
+                        while s2 < sub_len {
+                            let idx2: i64 = row * m + (k + s2);
+                            set(mut ref U, idx2, U[idx2] - 2.0 * d2 * v[s2]);
+                            s2 = s2 + 1;
+                        }
+                        row = row + 1;
+                    }
+                }
+            }
+        }
+
+        // --- Right reflector: zero B[k, k+2:n] ---
+        let rsub_len: i64 = n - k - 1;
+        if rsub_len > 1 {
+            let xr: Vec<f64> = vec();
+            let jc: i64 = k + 1;
+            while jc < n {
+                push(mut ref xr, B[k * n + jc]);
+                jc = jc + 1;
+            }
+            let xr_norm: f64 = vec_norm2(ref xr, rsub_len);
+            if xr_norm > 1.0e-14 {
+                let sign_r0: f64 = 1.0;
+                if xr[0] < 0.0 { sign_r0 = 0.0 - 1.0; }
+                let ralpha: f64 = (0.0 - sign_r0) * xr_norm;
+                let vr: Vec<f64> = vec();
+                let jr: i64 = 0;
+                while jr < rsub_len {
+                    let vrj: f64 = xr[jr];
+                    if jr == 0 { vrj = vrj - ralpha; }
+                    push(mut ref vr, vrj);
+                    jr = jr + 1;
+                }
+                let vr_norm: f64 = vec_norm2(ref vr, rsub_len);
+                if vr_norm > 1.0e-14 {
+                    let jjr: i64 = 0;
+                    while jjr < rsub_len {
+                        set(mut ref vr, jjr, vr[jjr] / vr_norm);
+                        jjr = jjr + 1;
+                    }
+                    // Apply to B: for every row r in [k:m), update B[r, k+1:n].
+                    let r3: i64 = k;
+                    while r3 < m {
+                        let d3: f64 = 0.0;
+                        let c3: i64 = 0;
+                        while c3 < rsub_len {
+                            d3 = d3 + B[r3 * n + (k + 1 + c3)] * vr[c3];
+                            c3 = c3 + 1;
+                        }
+                        let c4: i64 = 0;
+                        while c4 < rsub_len {
+                            let idx3: i64 = r3 * n + (k + 1 + c4);
+                            set(mut ref B, idx3, B[idx3] - 2.0 * d3 * vr[c4]);
+                            c4 = c4 + 1;
+                        }
+                        r3 = r3 + 1;
+                    }
+                    // Accumulate V: for every row of V, update V[row, k+1:n].
+                    let row2: i64 = 0;
+                    while row2 < n {
+                        let d4: f64 = 0.0;
+                        let s3: i64 = 0;
+                        while s3 < rsub_len {
+                            d4 = d4 + V[row2 * n + (k + 1 + s3)] * vr[s3];
+                            s3 = s3 + 1;
+                        }
+                        let s4: i64 = 0;
+                        while s4 < rsub_len {
+                            let idx4: i64 = row2 * n + (k + 1 + s4);
+                            set(mut ref V, idx4, V[idx4] - 2.0 * d4 * vr[s4]);
+                            s4 = s4 + 1;
+                        }
+                        row2 = row2 + 1;
+                    }
+                }
+            }
+        }
+
+        k = k + 1;
+    }
+
+    let out: Vec<f64> = vec();
+    let a0: i64 = 0;
+    while a0 < m * m { push(mut ref out, U[a0]); a0 = a0 + 1; }
+    let a1: i64 = 0;
+    while a1 < m * n { push(mut ref out, B[a1]); a1 = a1 + 1; }
+    let a2: i64 = 0;
+    while a2 < n * n { push(mut ref out, V[a2]); a2 = a2 + 1; }
+    return out;
+}

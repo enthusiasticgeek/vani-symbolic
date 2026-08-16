@@ -1,0 +1,74 @@
+use "../src/lib.vani";
+
+fn neg_y(t: f64, y: f64) -> f64 { return 0.0 - y; }
+
+fn make_ts(n: i64, t_end: f64) -> Vec<f64> {
+    let ts: Vec<f64> = vec(0.0);
+    let i: i64 = 1;
+    while i < n {
+        push(mut ref ts, t_end * (i as f64) / ((n - 1) as f64));
+        i = i + 1;
+    }
+    return ts;
+}
+
+// euler_step: y + h*f_val = 1.0 + 0.1*(−1.0) = 0.9.
+#[test]
+fn test_euler_step() -> i64 {
+    let result: f64 = euler_step(1.0, 0.1, 0.0 - 1.0);
+    assert abs(result - 0.9) < 1.0e-12;
+    return 0;
+}
+
+// rk4_step: with k1=k2=k3=k4=2 → y + h/6*(2+4+4+2) = 1.0 + 0.2 = 1.2.
+#[test]
+fn test_rk4_step() -> i64 {
+    let result: f64 = rk4_step(1.0, 0.1, 2.0, 2.0, 2.0, 2.0);
+    assert abs(result - 1.2) < 1.0e-12;
+    return 0;
+}
+
+// adams_bashforth_2: y + h*(3*f_curr − f_prev)/2 = 1.0 + 0.5*(3−0)/2 = 1.75.
+#[test]
+fn test_adams_bashforth_2() -> i64 {
+    let result: f64 = adams_bashforth_2(1.0, 0.0, 1.0, 0.5);
+    assert abs(result - 1.75) < 1.0e-12;
+    return 0;
+}
+
+// euler_solve: dy/dt=−y, y(0)=1, t∈[0,1], 1001 steps.
+// Euler error is O(h)=O(1e-3); exact y(1)=e^(−1).
+#[test]
+fn test_euler_solve_decay() -> i64 {
+    let ts: Vec<f64> = make_ts(1001, 1.0);
+    let ys: Vec<f64> = euler_solve(1.0, ref ts, neg_y);
+    let n: i64 = len(ref ys) as i64;
+    let y_end: f64 = ys[n - 1];
+    let exact: f64 = exp(0.0 - 1.0);
+    assert abs(y_end - exact) < 5.0e-4;
+    return 0;
+}
+
+// rk4_solve: same ODE. RK4 error is O(h^4)≈O(1e-12); use tol=1e-8.
+#[test]
+fn test_rk4_solve_decay() -> i64 {
+    let ts: Vec<f64> = make_ts(1001, 1.0);
+    let ys: Vec<f64> = rk4_solve(1.0, ref ts, neg_y);
+    let n: i64 = len(ref ys) as i64;
+    let y_end: f64 = ys[n - 1];
+    let exact: f64 = exp(0.0 - 1.0);
+    assert abs(y_end - exact) < 1.0e-8;
+    return 0;
+}
+
+// rk45_step: single Dormand-Prince step h=0.1 for dy/dt=−y.
+// 5th-order: error O(h^6)≈1e-9; use tol=1e-8.
+#[test]
+fn test_rk45_step_decay() -> i64 {
+    let y1: f64 = rk45_step(0.0, 1.0, 0.1, neg_y);
+    let exact: f64 = exp(0.0 - 0.1);
+    assert abs(y1 - exact) < 1.0e-8;
+    return 0;
+}
+
+fn main() -> i64 { return 0; }

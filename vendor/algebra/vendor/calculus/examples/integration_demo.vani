@@ -1,0 +1,57 @@
+// Numerical integration demo: compare trapz, Simpson, Romberg, Gauss-Legendre,
+// and adaptive trapz on  ∫₀^π sin(x) dx = 2  (exact).
+//
+// Run with:  vanic run examples/integration_demo.vani
+
+use "../src/lib.vani";
+
+fn sq(x: f64) -> f64 { return x * x; }
+fn sin_fn(x: f64) -> f64 { return sin(x); }
+
+fn main() -> i64 {
+    let pi: f64 = 3.141592653589793;
+
+    // Build uniform sample of sin(x) over [0, π].
+    let n: i64 = 101;
+    let ys: Vec<f64> = vec(sin(0.0));
+    let i: i64 = 1;
+    while i < n {
+        let x: f64 = pi * (i as f64) / ((n - 1) as f64);
+        push(mut ref ys, sin(x));
+        i = i + 1;
+    }
+
+    let exact: f64 = 2.0;
+
+    let r_trapz: f64 = integrate_trapz(0.0, pi, ref ys);
+    print "trapz       (n=101):", r_trapz, "  error:", abs(r_trapz - exact);
+
+    let r_simp: f64 = integrate_simpson(0.0, pi, ref ys);
+    print "simpson     (n=101):", r_simp, "  error:", abs(r_simp - exact);
+
+    // Romberg with 17 samples (2^4+1).
+    let n2: i64 = 17;
+    let ys2: Vec<f64> = vec(sin(0.0));
+    let j: i64 = 1;
+    while j < n2 {
+        let x2: f64 = pi * (j as f64) / ((n2 - 1) as f64);
+        push(mut ref ys2, sin(x2));
+        j = j + 1;
+    }
+    let r_romberg: f64 = integrate_romberg(0.0, pi, ref ys2, 4);
+    print "romberg     (n=17, levels=4):", r_romberg, "  error:", abs(r_romberg - exact);
+
+    let r_gl5: f64 = integrate_gauss_legendre_5(0.0, pi, sin_fn);
+    print "gauss-leg-5:", r_gl5, "  error:", abs(r_gl5 - exact);
+
+    let r_adapt: f64 = integrate_adaptive_trapz(0.0, pi, sin_fn, 1.0e-9);
+    print "adaptive    (tol=1e-9):", r_adapt, "  error:", abs(r_adapt - exact);
+
+    // Also demonstrate on ∫₀¹ x² dx = 1/3.
+    print "";
+    print "∫₀¹ x² dx  (exact = 0.333...)";
+    let r_sq_gl: f64 = integrate_gauss_legendre_5(0.0, 1.0, sq);
+    print "gauss-leg-5:", r_sq_gl;
+
+    return 0;
+}

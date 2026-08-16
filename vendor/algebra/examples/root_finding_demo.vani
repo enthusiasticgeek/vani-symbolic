@@ -1,0 +1,60 @@
+// Builds a degree-6 polynomial from six chosen roots, then finds them back
+// with algebra_poly_roots_real -- illustrating the full pipeline (companion
+// matrix + mat_eig_power + synthetic deflation + Newton polish) on a
+// polynomial well past where a closed form exists. Also verifies each
+// found root actually zeroes the original polynomial.
+//
+// Run with:  vanic run examples/root_finding_demo.vani
+
+use "../src/lib.vani";
+
+fn poly_value(coeffs: ref Vec<f64>, x: f64) -> f64 {
+    let n: i64 = len(coeffs) as i64;
+    let result: f64 = 0.0;
+    let power: f64 = 1.0;
+    let i: i64 = 0;
+    while i < n {
+        result = result + coeffs[i] * power;
+        power = power * x;
+        i = i + 1;
+    }
+    return result;
+}
+
+fn main() -> i64 {
+    let chosen_roots: Vec<f64> = vec();
+    push(mut ref chosen_roots, 0.0 - 4.0);
+    push(mut ref chosen_roots, 0.0 - 1.5);
+    push(mut ref chosen_roots, 0.5);
+    push(mut ref chosen_roots, 2.0);
+    push(mut ref chosen_roots, 3.25);
+    push(mut ref chosen_roots, 7.0);
+
+    print "chosen roots:";
+    let i: i64 = 0;
+    while i < 6 {
+        print chosen_roots[i];
+        i = i + 1;
+    }
+
+    let coeffs: Vec<f64> = algebra_poly_from_roots(ref chosen_roots);
+    print "degree of built polynomial (expect 6):";
+    print (len(ref coeffs) as i64) - 1;
+
+    let found: Vec<f64> = algebra_poly_roots_real(ref coeffs);
+    print "roots found by algebra_poly_roots_real:";
+    i = 0;
+    while i < (len(ref found) as i64) {
+        print found[i];
+        i = i + 1;
+    }
+
+    print "p(root) for each found root (should all be ~0):";
+    i = 0;
+    while i < (len(ref found) as i64) {
+        print poly_value(ref coeffs, found[i]);
+        i = i + 1;
+    }
+
+    return 0;
+}

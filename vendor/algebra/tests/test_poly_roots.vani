@@ -1,0 +1,95 @@
+// Tests for polynomial construction/deflation helpers and the general
+// real-root finder, including a composed round-trip check: build a
+// polynomial from a chosen set of roots (algebra_poly_from_roots), then
+// find its roots back (algebra_poly_roots_real), and confirm they match --
+// this exercises poly_from_roots, the companion matrix, mat_eig_power,
+// synthetic deflation, and Newton polishing all together, not in isolation.
+// Run with:  vanic test tests/test_poly_roots.vani
+
+use "../src/lib.vani";
+
+fn close(a: f64, b: f64) -> bool {
+    return abs(a - b) < 1.0e-6;
+}
+
+fn has_root(roots: ref Vec<f64>, target: f64) -> bool {
+    let n: i64 = len(roots) as i64;
+    let i: i64 = 0;
+    while i < n {
+        if close(roots[i], target) {
+            return true;
+        }
+        i = i + 1;
+    }
+    return false;
+}
+
+fn main() -> i64 {
+    // algebra_poly_from_roots: (x-1)(x-2)(x-3) -> [-6, 11, -6, 1].
+    let roots3: Vec<f64> = vec();
+    push(mut ref roots3, 1.0); push(mut ref roots3, 2.0); push(mut ref roots3, 3.0);
+    let coeffs3: Vec<f64> = algebra_poly_from_roots(ref roots3);
+    assert close(coeffs3[0], 0.0 - 6.0);
+    assert close(coeffs3[1], 11.0);
+    assert close(coeffs3[2], 0.0 - 6.0);
+    assert close(coeffs3[3], 1.0);
+
+    // algebra_poly_normalize_monic on a non-monic polynomial.
+    let raw: Vec<f64> = vec();
+    push(mut ref raw, 4.0); push(mut ref raw, 6.0); push(mut ref raw, 2.0);
+    let monic: Vec<f64> = algebra_poly_normalize_monic(ref raw);
+    assert close(monic[0], 2.0);
+    assert close(monic[1], 3.0);
+    assert close(monic[2], 1.0);
+
+    // algebra_poly_deflate: (x-1)(x-2)(x-3) deflated by root 3 should give
+    // (x-1)(x-2) = x^2 - 3x + 2 -> [2, -3, 1].
+    let deflated: Vec<f64> = algebra_poly_deflate(ref coeffs3, 3.0);
+    assert close(deflated[0], 2.0);
+    assert close(deflated[1], 0.0 - 3.0);
+    assert close(deflated[2], 1.0);
+
+    // algebra_poly_refine_newton: p(x) = x^2 - 2, refine from x0=1 -> sqrt(2).
+    let sq2: Vec<f64> = vec();
+    push(mut ref sq2, 0.0 - 2.0); push(mut ref sq2, 0.0); push(mut ref sq2, 1.0);
+    let refined: f64 = algebra_poly_refine_newton(ref sq2, 1.0, 20);
+    assert close(refined, sqrt(2.0));
+
+    // algebra_poly_roots_real: degree 1 through 5, direct hand-computed cases.
+    let c1: Vec<f64> = vec();
+    push(mut ref c1, 0.0 - 4.0); push(mut ref c1, 2.0);
+    let r1: Vec<f64> = algebra_poly_roots_real(ref c1);
+    assert (len(ref r1) as i64) == 1;
+    assert close(r1[0], 2.0);
+
+    let c2: Vec<f64> = vec();
+    push(mut ref c2, 6.0); push(mut ref c2, 0.0 - 5.0); push(mut ref c2, 1.0);
+    let r2: Vec<f64> = algebra_poly_roots_real(ref c2);
+    assert (len(ref r2) as i64) == 2;
+    assert has_root(ref r2, 2.0);
+    assert has_root(ref r2, 3.0);
+
+    // algebra_quartic_roots_real: (x-1)(x-2)(x-3)(x-4), a=1,b=-10,c=35,d=-50,e=24.
+    let r4: Vec<f64> = algebra_quartic_roots_real(1.0, 0.0 - 10.0, 35.0, 0.0 - 50.0, 24.0);
+    assert (len(ref r4) as i64) == 4;
+    assert has_root(ref r4, 1.0);
+    assert has_root(ref r4, 2.0);
+    assert has_root(ref r4, 3.0);
+    assert has_root(ref r4, 4.0);
+
+    // Composed round trip: pick 6 arbitrary real roots (degree 6, well past
+    // the closed-form cases), build the polynomial, then recover the roots.
+    let chosen: Vec<f64> = vec();
+    push(mut ref chosen, 0.0 - 3.5); push(mut ref chosen, 0.0 - 1.0); push(mut ref chosen, 0.5);
+    push(mut ref chosen, 2.0); push(mut ref chosen, 4.25); push(mut ref chosen, 6.0);
+    let built: Vec<f64> = algebra_poly_from_roots(ref chosen);
+    let found: Vec<f64> = algebra_poly_roots_real(ref built);
+    assert (len(ref found) as i64) == 6;
+    let i: i64 = 0;
+    while i < 6 {
+        assert has_root(ref found, chosen[i]);
+        i = i + 1;
+    }
+
+    return 0;
+}

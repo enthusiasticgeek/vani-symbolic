@@ -3,7 +3,9 @@
 > Compiler builtins that already exist and must NOT be reimplemented:
 > `push` `len` `vec` `i64_to_str` `clone_at`
 >
-> No deps (self-contained).
+> Self-contained through v0.3.0. v0.5.0 adds `algebra` as a real
+> production dependency (equation solving); `calculus` remains
+> tests/examples-only (differentiation's cross-check).
 
 ---
 
@@ -223,6 +225,86 @@ associativity flattening).
 
 ---
 
+## v0.5.0 — Implemented ✓
+
+The roadmap's recommended order does v0.5.0 before v0.4.0 ("cheap,
+reuses vani-algebra, can jump ahead of v0.4.0 if integration stalls"),
+so this phase landed before symbolic integration despite the version
+number. Confirmed Low risk as scoped: "thin layer, most of the hard
+work is already done in vani-algebra."
+
+### Equation solving, degree <= 2 (2 public functions + 2 private helpers)
+- [x] `sym_poly_coeffs_le2` -- extracts `[c0, c1, c2]` polynomial
+      coefficients from a symbolic expression tree, by reusing
+      `_sym_flatten_sum` (the exact same proven Add/Sub walker
+      `sym_simplify`'s own Layer 2 uses) to un-nest the top-level sum,
+      `sym_simplify`-ing each term individually, then classifying each
+      into one of five recognized shapes (`Num`, `Var`,
+      `Mul(Num,Var)`/`Mul(Var,Num)`, `Pow(Var,Num=2)`,
+      `Mul(Num,Pow)`/`Mul(Pow,Num)`). Returns an explicit `ok=false` for
+      any unrecognized shape (`x^3`, `x*y`, ...) -- not a guess, matching
+      the same "no rule matched" discipline v0.4.0's integration table
+      will need. Deliberately NOT a general polynomial normalizer --
+      that would need full expansion/collection, `sym_simplify`'s own
+      v0.2.0 header already documents that as out of scope.
+- [x] `_sym_is_var_squared` -- private helper recognizing the one
+      degree-2 shape this phase handles (`Pow(Var(var_id), Num(2))`).
+- [x] `sym_solve_poly_le2(src, root, var_id)` -- solves `p(x) = 0` for
+      real `x`; builds the ascending-degree coefficient `Vec` and hands
+      off to `algebra::algebra_poly_roots_real` (vani-algebra's existing
+      general real-root solver, reused rather than reimplemented, per
+      the roadmap's explicit call for this -- it already dispatches to
+      the right closed form per degree, including quadratic via the
+      compiler's own `f64_quadratic_root` builtin + Vieta's formula for
+      the second root). Returns empty for an unrecognized shape or a
+      degenerate (both `c1`/`c2` ~0) expression -- neither "no solution"
+      nor "every x" fits a finite `Vec<f64>` answer.
+- [x] `sym_solve_equation_le2(lsrc, lhs, rsrc, rhs, var_id)` -- the
+      common two-sided "something = something" form (not pre-arranged to
+      `= 0`), built on `sym_poly_coeffs_le2` extracting each side
+      independently and subtracting coefficients directly -- avoids
+      needing a `mut ref` on either caller's arena just to build a `Sub`
+      node, and works even when `lhs`/`rhs` live in different arenas.
+
+### Dependency
+- [x] Vendored `vani-algebra` via `vanic add algebra` -- a REAL
+      production dependency this time (unlike `calculus`, which is
+      tests/examples-only). Hit a real resolver conflict doing this:
+      `vani-algebra`'s own vendored `calculus` was stale (`^0.2.0`
+      against this package's `^0.3.1`), and vāṇी requires a single
+      resolved version per package name across the whole graph. Fixed by
+      bumping `vani-algebra` itself to `v0.1.4` (a pure dependency-version
+      bump, its production code's `calculus::` calls are all stable,
+      unchanged APIs) and republishing it, then vendoring the fixed
+      version here.
+
+### Tests
+- [x] `tests/test_solve.vani` (8 `#[test]`s) -- linear via `Mul(Num,Var)`
+      and via a bare `Var` term, quadratic with two real roots (verified
+      as a SET, not order-dependent) and with a nonzero leading
+      coefficient, the two-sided equation form (deliberately using
+      DIFFERENT arenas for `lhs`/`rhs` to exercise that the function
+      doesn't require them to share one), an unrecognized-shape case
+      (`x^3`) confirming the explicit empty-result signal, a degenerate
+      pure-constant case, and a composed check tying v0.3.0 and v0.5.0
+      together: finding a parabola's vertex by solving `f'(x) = 0`
+      (`sym_diff` then `sym_solve_poly_le2`). Every found root is also
+      confirmed via direct `sym_eval` against the original expression,
+      not just trusted from the solver.
+- [x] `examples/solve_demo.vani` -- the same four cases (linear,
+      quadratic, two-sided, composed-with-diff), verified on both
+      backends.
+
+### Safety annotations
+- [x] `vanic audit-safety` reports full clean coverage (31 functions
+      checked, 0 gaps) -- `sym_poly_coeffs_le2`/`sym_solve_poly_le2`/
+      `sym_solve_equation_le2` are exempt from both `#[bounded_stack]`
+      and `#[wcet]` (their cost depends on the number of flattened terms,
+      a runtime value, via `_sym_flatten_sum`); `_sym_is_var_squared` (a
+      fixed-shape leaf check) got a real `#[bounded_stack]`/`#[wcet]`.
+
+---
+
 ## Future
 
 Phased breakdown (versions proposed, not committed) tracked in
@@ -234,8 +316,6 @@ confirm-before-starting, same discipline as this package itself.
   (term-by-term polynomial power rule, elementary antiderivatives, a
   few recognized `u`-substitution shapes), not a general algorithm (no
   Risch). Not started.
-- **v0.5.0: Simple equation solving** -- linear directly, quadratic via
-  `vani-algebra`'s existing closed-form solver. Not started.
 - **v0.6.0+: Polynomial factorization** -- folds in what would have
   been a separate `vani-polyalgebra` repo (rational-root theorem +
   synthetic division). Gröbner bases stay out of scope unless a real

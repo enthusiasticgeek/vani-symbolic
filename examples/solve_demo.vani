@@ -1,0 +1,68 @@
+// A quick tour of vani-symbolic v0.5.0's equation solving: linear and
+// quadratic equations, plus the composed check that ties v0.3.0
+// (differentiation) and v0.5.0 (solving) together -- finding a
+// parabola's vertex by solving f'(x) = 0.
+// Run with:  vanic run examples/solve_demo.vani
+
+use "../src/lib.vani";
+
+fn print_roots(roots: Vec<f64>) -> i64 {
+    let n: i64 = len(ref roots) as i64;
+    if n == 0 {
+        print "  (no roots recognized/found)";
+        return 0;
+    }
+    let i: i64 = 0;
+    while i < n {
+        print roots[i];
+        i = i + 1;
+    }
+    return 0;
+}
+
+fn main() -> i64 {
+    // ---- Linear: 2x - 6 = 0 -> x = 3 ----
+    let a1: Vec<ExprNode> = sym_arena_new();
+    let t1: SymbolTable = symtab_new();
+    let vid1: i64 = symtab_intern(mut ref t1, "x");
+    let x1: i64 = sym_var(mut ref a1, mut ref t1, "x");
+    let e1: i64 = sym_sub(mut ref a1, sym_mul(mut ref a1, sym_num(mut ref a1, 2), x1), sym_num(mut ref a1, 6));
+    print "2x - 6 = 0  ->";
+    let _r1: i64 = print_roots(sym_solve_poly_le2(ref a1, e1, vid1));
+
+    // ---- Quadratic: x^2 - 5x + 6 = 0 -> x in {2, 3} ----
+    let a2: Vec<ExprNode> = sym_arena_new();
+    let t2: SymbolTable = symtab_new();
+    let vid2: i64 = symtab_intern(mut ref t2, "x");
+    let x2: i64 = sym_var(mut ref a2, mut ref t2, "x");
+    let x2_sq: i64 = sym_pow(mut ref a2, x2, sym_num(mut ref a2, 2));
+    let five_x2: i64 = sym_mul(mut ref a2, sym_num(mut ref a2, 5), x2);
+    let e2: i64 = sym_add(mut ref a2, sym_sub(mut ref a2, x2_sq, five_x2), sym_num(mut ref a2, 6));
+    print "x^2 - 5x + 6 = 0  ->";
+    let _r2: i64 = print_roots(sym_solve_poly_le2(ref a2, e2, vid2));
+
+    // ---- Two-sided: 2x + 3 = 7 -> x = 2 ----
+    let a3: Vec<ExprNode> = sym_arena_new();
+    let t3: SymbolTable = symtab_new();
+    let vid3: i64 = symtab_intern(mut ref t3, "x");
+    let x3: i64 = sym_var(mut ref a3, mut ref t3, "x");
+    let lhs3: i64 = sym_add(mut ref a3, sym_mul(mut ref a3, sym_num(mut ref a3, 2), x3), sym_num(mut ref a3, 3));
+    let a3r: Vec<ExprNode> = sym_arena_new();
+    let rhs3: i64 = sym_num(mut ref a3r, 7);
+    print "2x + 3 = 7  ->";
+    let _r3: i64 = print_roots(sym_solve_equation_le2(ref a3, lhs3, ref a3r, rhs3, vid3));
+
+    // ---- Composed with v0.3.0: vertex of f(x) = x^2 - 4x + 3 ----
+    let a4: Vec<ExprNode> = sym_arena_new();
+    let t4: SymbolTable = symtab_new();
+    let vid4: i64 = symtab_intern(mut ref t4, "x");
+    let x4: i64 = sym_var(mut ref a4, mut ref t4, "x");
+    let x4_sq: i64 = sym_pow(mut ref a4, x4, sym_num(mut ref a4, 2));
+    let four_x4: i64 = sym_mul(mut ref a4, sym_num(mut ref a4, 4), x4);
+    let f: i64 = sym_add(mut ref a4, sym_sub(mut ref a4, x4_sq, four_x4), sym_num(mut ref a4, 3));
+    let fprime: i64 = sym_diff(mut ref a4, f, vid4);
+    print "vertex of f(x) = x^2 - 4x + 3, via f'(x) = 0  ->";
+    let _r4: i64 = print_roots(sym_solve_poly_le2(ref a4, fprime, vid4));
+
+    return 0;
+}

@@ -1,0 +1,145 @@
+// Tests for Section 9: Householder QR decomposition and Golub-Kahan SVD
+// bidiagonalization.
+// Run with:  vanic test tests/test_qr_svd.vani
+
+use "../src/lib.vani";
+
+fn close(a: f64, b: f64) -> bool {
+    return abs(a - b) < 1.0e-9;
+}
+
+fn main() -> i64 {
+    // ── mat_qr_householder: canonical 3x3 example (Wikipedia's Householder
+    // QR worked example), validated via self-consistency rather than trusting
+    // a specific memorized sign convention: Q orthogonal, R upper triangular,
+    // Q*R reconstructs A exactly. ──────────────────────────────────────────
+    let A: Vec<f64> = vec(12.0);
+    push(mut ref A, 0.0 - 51.0); push(mut ref A, 4.0);
+    push(mut ref A, 6.0); push(mut ref A, 167.0); push(mut ref A, 0.0 - 68.0);
+    push(mut ref A, 0.0 - 4.0); push(mut ref A, 24.0); push(mut ref A, 0.0 - 41.0);
+
+    let qr: Vec<f64> = mat_qr_householder(ref A, 3, 3);
+    let Q: Vec<f64> = vec(qr[0]);
+    let i0: i64 = 1;
+    while i0 < 9 { push(mut ref Q, qr[i0]); i0 = i0 + 1; }
+    let R: Vec<f64> = vec(qr[9]);
+    let i1: i64 = 10;
+    while i1 < 18 { push(mut ref R, qr[i1]); i1 = i1 + 1; }
+
+    // R is upper triangular: all below-diagonal entries are ~0.
+    assert close(R[3], 0.0);
+    assert close(R[6], 0.0);
+    assert close(R[7], 0.0);
+
+    // Q is orthogonal: Q^T Q = I.
+    let Qt: Vec<f64> = mat_transpose(ref Q, 3, 3);
+    let QtQ: Vec<f64> = mat_mul(ref Qt, ref Q, 3);
+    let ii: i64 = 0;
+    while ii < 3 {
+        let jj: i64 = 0;
+        while jj < 3 {
+            let expected: f64 = 0.0;
+            if ii == jj { expected = 1.0; }
+            assert close(QtQ[ii * 3 + jj], expected);
+            jj = jj + 1;
+        }
+        ii = ii + 1;
+    }
+
+    // Q*R reconstructs A exactly.
+    let QR: Vec<f64> = mat_mul(ref Q, ref R, 3);
+    let k: i64 = 0;
+    while k < 9 {
+        assert close(QR[k], A[k]);
+        k = k + 1;
+    }
+
+    // ── mat_qr_householder: non-square 3x2 case ────────────────────────────
+    let A2: Vec<f64> = vec(0.0);
+    push(mut ref A2, 1.0); push(mut ref A2, 1.0);
+    push(mut ref A2, 1.0); push(mut ref A2, 1.0); push(mut ref A2, 0.0);
+    let qr2: Vec<f64> = mat_qr_householder(ref A2, 3, 2);
+    let Q2: Vec<f64> = vec(qr2[0]);
+    let a0: i64 = 1;
+    while a0 < 9 { push(mut ref Q2, qr2[a0]); a0 = a0 + 1; }
+    let R2: Vec<f64> = vec(qr2[9]);
+    let a1: i64 = 10;
+    while a1 < 15 { push(mut ref R2, qr2[a1]); a1 = a1 + 1; }
+    let Q2R2: Vec<f64> = mat_mul_rect(ref Q2, ref R2, 3, 3, 2);
+    let k2: i64 = 0;
+    while k2 < 6 {
+        assert close(Q2R2[k2], A2[k2]);
+        k2 = k2 + 1;
+    }
+
+    // ── mat_svd_bidiag: 4x3 example, validated via reconstruction and
+    // orthogonality (same discipline as the QR test above). ────────────────
+    let m: i64 = 4;
+    let n: i64 = 3;
+    let B_in: Vec<f64> = vec(1.0);
+    push(mut ref B_in, 2.0); push(mut ref B_in, 3.0);
+    push(mut ref B_in, 4.0); push(mut ref B_in, 5.0); push(mut ref B_in, 6.0);
+    push(mut ref B_in, 7.0); push(mut ref B_in, 8.0); push(mut ref B_in, 10.0);
+    push(mut ref B_in, 10.0); push(mut ref B_in, 11.0); push(mut ref B_in, 13.0);
+
+    let packed: Vec<f64> = mat_svd_bidiag(ref B_in, m, n);
+    let U: Vec<f64> = vec(packed[0]);
+    let p0: i64 = 1;
+    while p0 < m * m { push(mut ref U, packed[p0]); p0 = p0 + 1; }
+    let Bd: Vec<f64> = vec(packed[m * m]);
+    let p1: i64 = m * m + 1;
+    while p1 < m * m + m * n { push(mut ref Bd, packed[p1]); p1 = p1 + 1; }
+    let V: Vec<f64> = vec(packed[m * m + m * n]);
+    let p2: i64 = m * m + m * n + 1;
+    while p2 < m * m + m * n + n * n { push(mut ref V, packed[p2]); p2 = p2 + 1; }
+
+    // Bd is bidiagonal: zero below the diagonal and beyond the superdiagonal.
+    assert close(Bd[3], 0.0);   // row 1, col 0
+    assert close(Bd[6], 0.0);   // row 2, col 0
+    assert close(Bd[7], 0.0);   // row 2, col 1
+    assert close(Bd[9], 0.0);   // row 3, col 0
+    assert close(Bd[10], 0.0);  // row 3, col 1
+    assert close(Bd[11], 0.0);  // row 3, col 2
+    assert close(Bd[2], 0.0);   // row 0, col 2 (beyond superdiagonal)
+
+    // U is orthogonal: U^T U = I.
+    let Ut: Vec<f64> = mat_transpose(ref U, m, m);
+    let UtU: Vec<f64> = mat_mul(ref Ut, ref U, m);
+    let ri: i64 = 0;
+    while ri < m {
+        let ci: i64 = 0;
+        while ci < m {
+            let expected2: f64 = 0.0;
+            if ri == ci { expected2 = 1.0; }
+            assert close(UtU[ri * m + ci], expected2);
+            ci = ci + 1;
+        }
+        ri = ri + 1;
+    }
+
+    // V is orthogonal: V^T V = I.
+    let Vt: Vec<f64> = mat_transpose(ref V, n, n);
+    let VtV: Vec<f64> = mat_mul(ref Vt, ref V, n);
+    let rj: i64 = 0;
+    while rj < n {
+        let cj: i64 = 0;
+        while cj < n {
+            let expected3: f64 = 0.0;
+            if rj == cj { expected3 = 1.0; }
+            assert close(VtV[rj * n + cj], expected3);
+            cj = cj + 1;
+        }
+        rj = rj + 1;
+    }
+
+    // U * B * V^T reconstructs the original matrix.
+    let UB: Vec<f64> = mat_mul_rect(ref U, ref Bd, m, m, n);
+    let UBVt: Vec<f64> = mat_mul_rect(ref UB, ref Vt, m, n, n);
+    let kk: i64 = 0;
+    while kk < m * n {
+        assert close(UBVt[kk], B_in[kk]);
+        kk = kk + 1;
+    }
+
+    return 0;
+}

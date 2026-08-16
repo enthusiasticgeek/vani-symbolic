@@ -1,0 +1,52 @@
+// Extrema demo: find minima and maxima of analytic functions using
+// golden_section, brent_min, and newton_min.  Classifies critical points
+// with the second-derivative test.
+//
+// Run with:  vanic run examples/extrema_demo.vani
+
+use "../src/lib.vani";
+
+fn quad(x: f64) -> f64 { let u: f64 = x - 3.0; return u * u; }
+fn neg_sin(x: f64) -> f64 { return 0.0 - sin(x); }
+fn poly4(x: f64) -> f64 { return x * x * x * x - 8.0 * x * x + 5.0; }
+
+fn main() -> i64 {
+    let pi: f64 = 3.141592653589793;
+    let h: f64 = 1.0e-5;
+
+    // Three methods on (x-3)^2: min at x=3.
+    print "=== (x-3)^2: three minimizers ===";
+    let xg: f64 = golden_section(0.0, 6.0, quad, 1.0e-12, 100);
+    let xb: f64 = brent_min(0.0, 6.0, quad, 1.0e-12, 100);
+    let xn: f64 = newton_min(0.0, quad, 1.0e-12, 50);
+    print "golden_section:", xg, "  f =", quad(xg);
+    print "brent_min:     ", xb, "  f =", quad(xb);
+    print "newton_min:    ", xn, "  f =", quad(xn);
+
+    // Maximum of sin(x) on [0, π]: minimize -sin(x).
+    print "";
+    print "=== max sin(x) on [0, π] via -sin(x) ===";
+    let xmax: f64 = brent_min(0.0, pi, neg_sin, 1.0e-12, 100);
+    print "argmax x =", xmax, "  (exact π/2 =", pi / 2.0, ")";
+    print "sin(argmax)  =", sin(xmax);
+
+    // Local minima of x^4 - 8x^2 + 5 (at x = ±2) and local max at x=0.
+    print "";
+    print "=== f(x) = x^4 - 8x^2 + 5 ===";
+    let xL: f64 = brent_min(0.0 - 3.0, 0.0 - 1.0, poly4, 1.0e-12, 100);
+    let xR: f64 = brent_min(1.0, 3.0, poly4, 1.0e-12, 100);
+    print "left  min: x =", xL, "  f =", poly4(xL), "  (exact x=-2, f=-11)";
+    print "right min: x =", xR, "  f =", poly4(xR), "  (exact x= 2, f=-11)";
+
+    // Second-derivative test at each critical point.
+    print "";
+    print "=== Second-derivative test ===";
+    let fppL: f64 = diff_second(poly4(xL - h), poly4(xL), poly4(xL + h), h);
+    let fppR: f64 = diff_second(poly4(xR - h), poly4(xR), poly4(xR + h), h);
+    let fpp0: f64 = diff_second(poly4(0.0 - h), poly4(0.0), poly4(h), h);
+    print "f''(", xL, ") =", fppL, " => local minimum";
+    print "f''(", xR, ") =", fppR, " => local minimum";
+    print "f''(0.0) =", fpp0, " => local maximum (f'' < 0)";
+
+    return 0;
+}

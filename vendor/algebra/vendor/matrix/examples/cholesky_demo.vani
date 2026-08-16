@@ -1,0 +1,68 @@
+// Cholesky decomposition demo.
+//
+// Given a symmetric positive-definite matrix A, compute L such that A = LLᵀ,
+// then use it to solve Ax = b cheaply and to compute the determinant as det(L)².
+//
+// A = [[4, 2, 0],    det(A) = 4(5*4 - 1*1) - 2(2*4 - 1*0) + 0 = 76 - 16 = 60
+//       [2, 5, 1],
+//       [0, 1, 4]]
+//
+// b = [6, 8, 4]  →  x ≈ [0.96667, 1.06667, 0.73333] (verified: Ax = b exactly)
+//
+// Run with:  vanic run examples/cholesky_demo.vani
+
+use "../src/lib.vani";
+
+fn main() -> i64 {
+    // Symmetric positive-definite 3×3 matrix
+    let A: Vec<f64> = vec(4.0);
+    push(mut ref A, 2.0); push(mut ref A, 0.0);
+    push(mut ref A, 2.0); push(mut ref A, 5.0); push(mut ref A, 1.0);
+    push(mut ref A, 0.0); push(mut ref A, 1.0); push(mut ref A, 4.0);
+
+    let b: Vec<f64> = vec(6.0);
+    push(mut ref b, 8.0);
+    push(mut ref b, 4.0);
+
+    print "=== Cholesky decomposition demo ===";
+    print "A = [[4,2,0],[2,5,1],[0,1,4]]  (symmetric positive-definite)";
+    print "b = [6, 8, 4]";
+    print "";
+
+    // Cholesky factor (stub — returns zeros until implemented)
+    let L: Vec<f64> = cholesky_factor(ref A, 3);
+    print "L (lower triangular, A = LLᵀ):";
+    print " [", mat_get(ref L, 3, 0, 0), mat_get(ref L, 3, 0, 1), mat_get(ref L, 3, 0, 2), "]";
+    print " [", mat_get(ref L, 3, 1, 0), mat_get(ref L, 3, 1, 1), mat_get(ref L, 3, 1, 2), "]";
+    print " [", mat_get(ref L, 3, 2, 0), mat_get(ref L, 3, 2, 1), mat_get(ref L, 3, 2, 2), "]";
+    print "";
+
+    // Verify L × Lᵀ ≈ A
+    let Lt: Vec<f64> = mat_transpose(ref L, 3, 3);
+    let LLt: Vec<f64> = mat_mul(ref L, ref Lt, 3);
+    print "L Lᵀ (should equal A):";
+    print " [", mat_get(ref LLt, 3, 0, 0), mat_get(ref LLt, 3, 0, 1), mat_get(ref LLt, 3, 0, 2), "]";
+    print " [", mat_get(ref LLt, 3, 1, 0), mat_get(ref LLt, 3, 1, 1), mat_get(ref LLt, 3, 1, 2), "]";
+    print " [", mat_get(ref LLt, 3, 2, 0), mat_get(ref LLt, 3, 2, 1), mat_get(ref LLt, 3, 2, 2), "]";
+    print "";
+
+    // Determinant: det(A) = det(L)² = (L[0,0] × L[1,1] × L[2,2])²
+    let d: f64 = mat_get(ref L, 3, 0, 0) * mat_get(ref L, 3, 1, 1) * mat_get(ref L, 3, 2, 2);
+    print "det(A) = (product of L diagonal)² =", d * d;
+    print "";
+
+    // Solve Ax = b via Cholesky (stub — returns zeros until implemented)
+    let x: Vec<f64> = cholesky_solve(ref L, ref b, 3);
+    print "Solution x of Ax=b:";
+    print " x[0] =", x[0];
+    print " x[1] =", x[1];
+    print " x[2] =", x[2];
+    print "";
+
+    // Residual
+    let Ax: Vec<f64> = mat_vec_mul(ref A, ref x, 3, 3);
+    let r: Vec<f64> = mat_sub(ref Ax, ref b, 3, 1);
+    print "Residual ||Ax - b|| =", vec_norm2(ref r, 3), "  (expected 0)";
+
+    return 0;
+}

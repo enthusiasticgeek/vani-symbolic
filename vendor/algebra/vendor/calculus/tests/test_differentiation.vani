@@ -1,0 +1,88 @@
+use "../src/lib.vani";
+
+fn x_sq(x: f64) -> f64 { return x * x; }
+
+// diff_central is exact for x² (O(h²) error cancels for quadratics).
+// f(x) = x², f'(3) = 6.
+#[test]
+fn test_diff_central_x_sq() -> i64 {
+    let h: f64 = 1.0e-5;
+    let x: f64 = 3.0;
+    let result: f64 = diff_central((x - h) * (x - h), (x + h) * (x + h), h);
+    assert abs(result - 6.0) < 1.0e-8;
+    return 0;
+}
+
+// diff_forward on x² at x=3. Error is O(h).
+#[test]
+fn test_diff_forward_x_sq() -> i64 {
+    let h: f64 = 1.0e-5;
+    let x: f64 = 3.0;
+    let result: f64 = diff_forward(x * x, (x + h) * (x + h), h);
+    assert abs(result - 6.0) < 1.0e-4;
+    return 0;
+}
+
+// diff_second on x² is exactly 2 for any h (third derivatives of x² vanish).
+#[test]
+fn test_diff_second_x_sq() -> i64 {
+    let h: f64 = 1.0e-4;
+    let x: f64 = 5.0;
+    let result: f64 = diff_second((x - h) * (x - h), x * x, (x + h) * (x + h), h);
+    assert abs(result - 2.0) < 1.0e-6;
+    return 0;
+}
+
+// gradient_1d on y = 2x (linear) gives exact gradient = 2 everywhere.
+#[test]
+fn test_gradient_1d_linear() -> i64 {
+    let xs: Vec<f64> = vec(0.0);
+    push(mut ref xs, 1.0);
+    push(mut ref xs, 2.0);
+    push(mut ref xs, 3.0);
+    push(mut ref xs, 4.0);
+    let ys: Vec<f64> = vec(0.0);
+    push(mut ref ys, 2.0);
+    push(mut ref ys, 4.0);
+    push(mut ref ys, 6.0);
+    push(mut ref ys, 8.0);
+    let grad: Vec<f64> = gradient_1d(xs, ys);
+    let i: i64 = 0;
+    while i < 5 {
+        assert abs(grad[i] - 2.0) < 1.0e-12;
+        i = i + 1;
+    }
+    return 0;
+}
+
+// jacobian_1d on f(x)=x² gives f'(x)=2x at each sample point.
+#[test]
+fn test_jacobian_1d_x_sq() -> i64 {
+    let xs: Vec<f64> = vec(1.0);
+    push(mut ref xs, 2.0);
+    push(mut ref xs, 3.0);
+    let h: f64 = 1.0e-6;
+    let jac: Vec<f64> = jacobian_1d(xs, x_sq, h);
+    assert abs(jac[0] - 2.0) < 1.0e-5;
+    assert abs(jac[1] - 4.0) < 1.0e-5;
+    assert abs(jac[2] - 6.0) < 1.0e-5;
+    return 0;
+}
+
+// hessian_diag on f(x)=x² gives f''(x)=2 everywhere.
+#[test]
+fn test_hessian_diag_x_sq() -> i64 {
+    let xs: Vec<f64> = vec(1.0);
+    push(mut ref xs, 5.0);
+    push(mut ref xs, 10.0);
+    let h: f64 = 1.0e-4;
+    let hess: Vec<f64> = hessian_diag(xs, x_sq, h);
+    let i: i64 = 0;
+    while i < 3 {
+        assert abs(hess[i] - 2.0) < 1.0e-5;
+        i = i + 1;
+    }
+    return 0;
+}
+
+fn main() -> i64 { return 0; }

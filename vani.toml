@@ -1,10 +1,10 @@
 [package]
 name    = "symbolic"
-version = "0.3.0"
+version = "0.5.0"
 entry   = "src/lib.vani"
 authors = "enthusiasticgeek"
 license = "MIT"
-description = "Symbolic-math (CAS) foundation for vāṇी: flat-arena expression trees, numeric evaluation, precedence-aware pretty-printing, simplification (constant folding, identities, like-term collection), and symbolic differentiation (sum/product/quotient/power+chain rules). Phases 1-3 of the planned symbolic-math tier -- no integration/equation solving yet."
+description = "Symbolic-math (CAS) foundation for vāṇी: flat-arena expression trees, numeric evaluation, precedence-aware pretty-printing, simplification (constant folding, identities, like-term collection), symbolic differentiation (sum/product/quotient/power+chain rules), and equation solving (linear/quadratic, via vani-algebra). No symbolic integration yet."
 registry = "kosh"
 
 [deps]
@@ -19,4 +19,16 @@ registry = "kosh"
 # matching this ecosystem's narrow-then-widen precedent. The design
 # leaves room to switch to a BigInt-backed side table later without
 # changing ExprNode's shape (see src/lib.vani header).
-calculus = { path = "./vendor/calculus", version = "^0.3.0" }
+calculus = { path = "./vendor/calculus", version = "^0.3.1" }
+
+# algebra: vendored via `vanic add algebra` for v0.5.0 -- REAL production
+# dependency (unlike calculus above), used by sym_solve_poly_le2 to solve
+# the extracted [c0,c1,c2] coefficients via algebra::algebra_poly_roots_real
+# (the same general real-root solver vani-algebra already has for linear/
+# quadratic/cubic/quartic+, reused rather than reimplemented, per the
+# roadmap's explicit call for this). Bumping this pulled in a version bump
+# of vani-algebra itself (0.1.3 -> 0.1.4) upstream, to align algebra's own
+# stale calculus ^0.2.0 pin with this package's ^0.3.1 -- vāṇी requires a
+# single resolved version per package name across the whole dependency
+# graph, so the two calculus requirements had to agree.
+algebra = { path = "./vendor/algebra", version = "^0.1.4" }

@@ -1,0 +1,38 @@
+// Stiff ODE demo: dy/dt = -50y, y(0) = 1, exact y(t) = e^(-50t).
+// With step size h = 0.1, explicit Euler's stability bound (h < 2/50 =
+// 0.04) is badly violated and the solution diverges; backward Euler and
+// Crank-Nicolson are both A-stable and stay bounded regardless of h.
+//
+// Run with:  vanic run examples/stiff_ode_demo.vani
+
+use "../src/lib.vani";
+
+fn stiff_decay(t: f64, y: f64) -> f64 { return 0.0 - 50.0 * y; }
+
+fn main() -> i64 {
+    let y0: f64 = 1.0;
+    let t_end: f64 = 0.5;
+    let n: i64 = 6;                       // step size h = 0.1
+
+    let ts: Vec<f64> = vec(0.0);
+    let i: i64 = 1;
+    while i < n {
+        push(mut ref ts, t_end * (i as f64) / ((n - 1) as f64));
+        i = i + 1;
+    }
+
+    let explicit_ys: Vec<f64> = euler_solve(y0, ref ts, stiff_decay);
+    let be_ys: Vec<f64> = backward_euler_solve(y0, ref ts, stiff_decay, 1.0e-10, 50);
+    let cn_ys: Vec<f64> = crank_nicolson_solve(y0, ref ts, stiff_decay, 1.0e-10, 50);
+
+    print "t      exact          explicit_euler  backward_euler  crank_nicolson";
+    i = 0;
+    while i < n {
+        let t: f64 = ts[i];
+        let exact: f64 = y0 * exp(0.0 - 50.0 * t);
+        print t, exact, explicit_ys[i], be_ys[i], cn_ys[i];
+        i = i + 1;
+    }
+
+    return 0;
+}

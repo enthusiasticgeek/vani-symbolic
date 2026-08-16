@@ -1,0 +1,75 @@
+// Tests for Section 9: eigenvalues (power iteration + deflation) and
+// condition number.
+// Run with:  vanic test tests/test_eig.vani
+
+use "../src/lib.vani";
+
+fn close(a: f64, b: f64) -> bool {
+    return abs(a - b) < 1.0e-9;
+}
+
+fn main() -> i64 {
+    // ── mat_eig_power: positive dominant eigenvalue ────────────────────────
+    // diag(4,1): dominant eigenpair is (4, [1,0]).
+    let A1: Vec<f64> = vec(4.0);
+    push(mut ref A1, 0.0); push(mut ref A1, 0.0); push(mut ref A1, 1.0);
+    let r1: Vec<f64> = mat_eig_power(ref A1, 2, 100, 1.0e-12);
+    assert close(r1[0], 4.0);
+    assert close(abs(r1[1]), 1.0);
+    assert close(abs(r1[2]), 0.0);
+
+    // ── mat_eig_power: negative dominant eigenvalue ────────────────────────
+    // diag(-5,2): dominant-by-magnitude eigenpair is (-5, [1,0]). Plain power
+    // iteration oscillates in sign each step for a negative eigenvalue; the
+    // Rayleigh-quotient eigenvalue estimate must still come out correctly signed.
+    let A2: Vec<f64> = vec(0.0 - 5.0);
+    push(mut ref A2, 0.0); push(mut ref A2, 0.0); push(mut ref A2, 2.0);
+    let r2: Vec<f64> = mat_eig_power(ref A2, 2, 200, 1.0e-12);
+    assert close(r2[0], 0.0 - 5.0);
+
+    // ── mat_eig_power: symmetric non-diagonal ──────────────────────────────
+    // [[2,1],[1,2]] has eigenvalues 3 and 1; dominant eigenvector is [1,1]/sqrt(2).
+    let A3: Vec<f64> = vec(2.0);
+    push(mut ref A3, 1.0); push(mut ref A3, 1.0); push(mut ref A3, 2.0);
+    let r3: Vec<f64> = mat_eig_power(ref A3, 2, 100, 1.0e-12);
+    assert close(r3[0], 3.0);
+    assert close(abs(r3[1]), 0.7071067811865476);
+    assert close(abs(r3[2]), 0.7071067811865476);
+
+    // ── mat_eig_deflate: diag(4,1) minus its dominant eigenpair -> diag(0,1) ──
+    let lambda1: f64 = r1[0];
+    let v1: Vec<f64> = vec(r1[1]); push(mut ref v1, r1[2]);
+    let deflated: Vec<f64> = mat_eig_deflate(ref A1, 2, lambda1, ref v1);
+    assert close(deflated[0], 0.0);
+    assert close(deflated[1], 0.0);
+    assert close(deflated[2], 0.0);
+    assert close(deflated[3], 1.0);
+    let r_second: Vec<f64> = mat_eig_power(ref deflated, 2, 100, 1.0e-12);
+    assert close(r_second[0], 1.0);
+
+    // ── mat_eig_deflate: [[2,1],[1,2]] minus its dominant eigenpair ────────
+    // Regression test: a *uniform* power-iteration starting vector lands
+    // exactly on this deflated matrix's non-dominant eigenvector by symmetry
+    // (the deflated matrix is [[0.5,-0.5],[-0.5,0.5]], whose zero-eigenvalue
+    // eigenvector is [1,1]/sqrt(2) -- exactly the old uniform start), which
+    // stalled convergence at the wrong eigenvalue (~0 instead of 1). Caught by
+    // testing this exact case in examples/eigen_qr_svd_demo.vani; fixed by
+    // starting power iteration from a non-uniform vector instead.
+    let v3: Vec<f64> = vec(r3[1]); push(mut ref v3, r3[2]);
+    let deflated3: Vec<f64> = mat_eig_deflate(ref A3, 2, r3[0], ref v3);
+    assert close(deflated3[0], 0.5);
+    assert close(deflated3[1], 0.0 - 0.5);
+    assert close(deflated3[2], 0.0 - 0.5);
+    assert close(deflated3[3], 0.5);
+    let r3_second: Vec<f64> = mat_eig_power(ref deflated3, 2, 100, 1.0e-12);
+    assert close(r3_second[0], 1.0);
+
+    // ── mat_cond: identity -> condition number 1 ───────────────────────────
+    let I: Vec<f64> = mat_identity(2);
+    assert close(mat_cond(ref I, 2), 1.0);
+
+    // ── mat_cond: diag(4,1) -> condition number 4 ──────────────────────────
+    assert close(mat_cond(ref A1, 2), 4.0);
+
+    return 0;
+}

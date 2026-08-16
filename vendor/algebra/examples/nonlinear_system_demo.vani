@@ -1,0 +1,33 @@
+// Finds an intersection point of a circle (x^2 + y^2 = 25) and a parabola
+// (y = x^2 - 5) using the finite-difference Newton system solver (no
+// analytic Jacobian supplied) -- a classic "solve two curves' intersection"
+// nonlinear system.
+//
+// Run with:  vanic run examples/nonlinear_system_demo.vani
+
+use "../src/lib.vani";
+
+fn curves_F(x: ref Vec<f64>) -> Vec<f64> {
+    let out: Vec<f64> = vec();
+    push(mut ref out, x[0] * x[0] + x[1] * x[1] - 25.0);
+    push(mut ref out, x[1] - x[0] * x[0] + 5.0);
+    return out;
+}
+
+fn main() -> i64 {
+    let x0: Vec<f64> = vec();
+    push(mut ref x0, 3.0);
+    push(mut ref x0, 3.0);
+
+    let sol: Vec<f64> = algebra_newton_system_fd(curves_F, ref x0, 2, 1.0e-6, 1.0e-10, 100);
+    print "intersection point of x^2+y^2=25 and y=x^2-5:";
+    print sol[0];
+    print sol[1];
+
+    print "residuals (should both be ~0):";
+    let res: Vec<f64> = curves_F(ref sol);
+    print res[0];
+    print res[1];
+
+    return 0;
+}

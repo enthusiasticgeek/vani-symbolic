@@ -1,0 +1,62 @@
+// Tests for the closed-form cubic real-root solver.
+// Run with:  vanic test tests/test_cubic.vani
+
+use "../src/lib.vani";
+
+fn close(a: f64, b: f64) -> bool {
+    return abs(a - b) < 1.0e-6;
+}
+
+fn has_root(roots: ref Vec<f64>, target: f64) -> bool {
+    let n: i64 = len(roots) as i64;
+    let i: i64 = 0;
+    while i < n {
+        if close(roots[i], target) {
+            return true;
+        }
+        i = i + 1;
+    }
+    return false;
+}
+
+fn main() -> i64 {
+    // (x-1)(x-2)(x-3) = x^3 - 6x^2 + 11x - 6: three real roots.
+    let r1: Vec<f64> = algebra_cubic_roots_real(1.0, 0.0 - 6.0, 11.0, 0.0 - 6.0);
+    assert (len(ref r1) as i64) == 3;
+    assert has_root(ref r1, 1.0);
+    assert has_root(ref r1, 2.0);
+    assert has_root(ref r1, 3.0);
+
+    // x^3 - 1 = 0: one real root, x = 1.
+    let r2: Vec<f64> = algebra_cubic_roots_real(1.0, 0.0, 0.0, 0.0 - 1.0);
+    assert (len(ref r2) as i64) == 1;
+    assert close(r2[0], 1.0);
+
+    // x^3 + x = 0 -> x(x^2+1) = 0: one real root, x = 0.
+    let r3: Vec<f64> = algebra_cubic_roots_real(1.0, 0.0, 1.0, 0.0);
+    assert (len(ref r3) as i64) == 1;
+    assert close(r3[0], 0.0);
+
+    // p == 0 special case: x^3 - 8 = 0 -> x = 2.
+    let r4: Vec<f64> = algebra_cubic_roots_real(1.0, 0.0, 0.0, 0.0 - 8.0);
+    assert (len(ref r4) as i64) == 1;
+    assert close(r4[0], 2.0);
+
+    // Every root found must actually satisfy the original cubic (composed
+    // check against algebra's own coefficients, not just the expected
+    // value): a*x^3 + b*x^2 + c*x + d ~= 0.
+    let a: f64 = 2.0;
+    let b: f64 = 0.0 - 3.0;
+    let c: f64 = 0.0 - 11.0;
+    let d: f64 = 6.0;
+    let r5: Vec<f64> = algebra_cubic_roots_real(a, b, c, d);
+    let i: i64 = 0;
+    while i < (len(ref r5) as i64) {
+        let x: f64 = r5[i];
+        let val: f64 = a * x * x * x + b * x * x + c * x + d;
+        assert abs(val) < 1.0e-6;
+        i = i + 1;
+    }
+
+    return 0;
+}

@@ -4,12 +4,27 @@ version = 1
 
 [[package]]
 name = "symbolic"
-version = "0.2.0"
+version = "0.3.0"
+
+[[package]]
+name = "algebra"
+version = "0.1.4"
+source = "local"
+direct = true
+path = "./vendor/algebra"
+version-req = "^0.1.4"
 
 [[package]]
 name = "calculus"
-version = "0.3.0"
+version = "0.3.1"
 source = "local"
 direct = true
 path = "./vendor/calculus"
-version-req = "^0.3.0"
+version-req = "^0.3.1"
+
+[[package]]
+name = "matrix"
+version = "0.2.0"
+source = "local"
+direct = false
+root-path = "/home/virgo/source/vani-symbolic/vendor/algebra/vendor/matrix"

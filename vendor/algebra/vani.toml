@@ -1,0 +1,11 @@
+[package]
+name    = "algebra"
+version = "0.1.4"
+entry   = "src/lib.vani"
+authors = "enthusiasticgeek"
+license = "MIT"
+registry = "kosh"
+
+[deps]
+matrix = { path = "./vendor/matrix", version = "^0.2.0" }
+calculus = { path = "./vendor/calculus", version = "^0.3.1" }
