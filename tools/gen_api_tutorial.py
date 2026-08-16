@@ -31,14 +31,30 @@ tools/tutorial_extras.json sidecar, hand-authored ONCE per package
     package solves and when to reach for it -- the one thing a bare
     signature+example reference genuinely can't answer on its own.
     Rendered on the index page.
-  - "math_notes": a {function_name: LaTeX string} map for the
-    functions whose behavior is naturally a formula (e.g. a sparse
-    matrix-vector product, a numerical-integration rule) -- authored
-    by reading the actual algorithm, not invented notation. Rendered
-    as a "**Math**" block under that function's section, using
-    MathJax's \( \) / \[ \] delimiters (book.toml enables
-    mathjax-support). Functions without an entry get no Math block --
-    most functions (constructors, accessors, plumbing) don't need one.
+  - "math_notes": a {function_name: value} map for the functions
+    whose behavior is naturally a formula (e.g. a sparse matrix-
+    vector product, a numerical-integration rule). Each value is
+    EITHER a plain string (legacy, rendered as one "**Math**" block)
+    OR a dict with up to four textbook-style sections, rendered as
+    labeled subsections in this order:
+      - "intuition": a plain-language analogy or motivating question
+        -- why does this operation exist, what problem does it solve,
+        BEFORE any notation appears. Written for a reader seeing the
+        concept for the first time, not someone who already knows it.
+      - "formula": the actual LaTeX statement of the operation.
+      - "example": a SMALL, fully worked, hand-verifiable numeric
+        example -- real numbers, every intermediate step shown, a
+        final answer a reader could check by hand. Not a code
+        snippet (that's the separate, auto-extracted "Example"
+        section below it) -- a textbook-style worked calculation.
+      - "why": why this specific function/approach matters in
+        practice, or what it costs/saves compared to the naive
+        alternative.
+    Every section uses MathJax's \( \) / \[ \] delimiters where
+    needed (book.toml enables mathjax-support). Functions without an
+    entry get no Math section at all -- most functions (constructors,
+    accessors, plumbing) don't need one; reserve this for the
+    functions where seeing the concept worked out actually helps.
 
     Author math_notes entries with NORMAL, single-backslash LaTeX
     (`\( y = Ax \)`, `\sum_{j}`, `\text{rows}`, `\,`, etc.) -- do NOT
@@ -232,6 +248,30 @@ def render_signature_block(name, sig):
     return "```vani\n{}\n```\n".format(sig)
 
 
+def render_math_note(note):
+    """A math_notes entry is either a plain string (legacy, rendered as a
+    single '**Math**' block) or a dict with textbook-style sections --
+    any of "intuition" / "formula" / "example" / "why" -- rendered as
+    labeled subsections in that order. Only "formula" is expected to
+    carry LaTeX; the others are plain prose, but all four are still run
+    through the markdown-escaper since a stray backslash-punctuation
+    sequence could appear anywhere."""
+    if isinstance(note, str):
+        return "**Math**:\n\n" + escape_latex_for_markdown(note) + "\n"
+    out = []
+    labels = [
+        ("intuition", "Intuition"),
+        ("formula", "The formula"),
+        ("example", "Worked example"),
+        ("why", "Why it matters"),
+    ]
+    for key, label in labels:
+        if key in note:
+            out.append("**{}**\n".format(label))
+            out.append(escape_latex_for_markdown(note[key]) + "\n")
+    return "\n".join(out)
+
+
 def render_function_section(fn, math_notes):
     out = ["## `{}`\n".format(fn["name"])]
     out.append(render_signature_block(fn["name"], fn["signature"]))
@@ -243,8 +283,7 @@ def render_function_section(fn, math_notes):
             "in the source -- undocumented._\n"
         )
     if fn["name"] in math_notes:
-        out.append("**Math**:\n")
-        out.append(escape_latex_for_markdown(math_notes[fn["name"]]) + "\n")
+        out.append(render_math_note(math_notes[fn["name"]]))
     example = find_example(fn["name"])
     if example:
         rel, line_text = example
@@ -323,7 +362,7 @@ def main():
     index = [note, "# {} v{}\n".format(meta["name"], meta["version"])]
     if extras["why_use_this"]:
         index.append("## Why use this package\n")
-        index.append(extras["why_use_this"] + "\n")
+        index.append(escape_latex_for_markdown(extras["why_use_this"]) + "\n")
     else:
         index.append(
             "> _No `tools/tutorial_extras.json` `why_use_this` entry yet "
