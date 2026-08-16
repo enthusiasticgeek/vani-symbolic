@@ -216,9 +216,28 @@ def read_extras():
 _MD_PUNCT = re.escape(r"""!"#$%&'()*+,-./:;<=>?@[\]^_`{|}~""")
 _ESCAPE_FOR_MARKDOWN_RE = re.compile(r"\\(?=[" + _MD_PUNCT + r"])")
 
+# A second, independent hazard: bare `_` and `*` (LaTeX subscripts like
+# `x_i`/`b_{k+1}`, exponents like `x^*`, plain-prose multiplication like
+# `a*x^3 + b*x^2`) are CommonMark emphasis delimiters. Whenever one lands
+# in a non-intraword position (next to `{`, `^`, a space, punctuation --
+# anything but a letter/digit on both sides), pulldown-cmark treats it as
+# a flanking delimiter and a LATER `_`/`*` elsewhere in the same block
+# closes it, silently swallowing both characters into an <em>/<strong>
+# tag and corrupting everything between them. Confirmed live on published
+# pages: `b_{k+\text{lag}}` lost its underscore and gained a stray <em>;
+# `a*x^3 + b*x^2` lost both asterisks and gained a stray <em>. Every bare
+# `_`/`*` gets its own single escaping backslash so CommonMark strips it
+# down to the literal character -- exactly what both plain prose and
+# MathJax subscripts/multiplication want. One already preceded by a
+# backslash (a LaTeX `\_` used inside \text{} for a literal underscore,
+# or output already produced by the doubling pass above) is left alone.
+_BARE_EMPHASIS_RE = re.compile(r"(?<!\\)[_*]")
+
 
 def escape_latex_for_markdown(s):
-    return _ESCAPE_FOR_MARKDOWN_RE.sub(r"\\\\", s)
+    s = _ESCAPE_FOR_MARKDOWN_RE.sub(r"\\\\", s)
+    s = _BARE_EMPHASIS_RE.sub(lambda m: "\\" + m.group(0), s)
+    return s
 
 
 def find_example(fn_name):
@@ -276,7 +295,7 @@ def render_function_section(fn, math_notes):
     out = ["## `{}`\n".format(fn["name"])]
     out.append(render_signature_block(fn["name"], fn["signature"]))
     if fn["doc"]:
-        out.append(fn["doc"] + "\n")
+        out.append(escape_latex_for_markdown(fn["doc"]) + "\n")
     else:
         out.append(
             "> _No `//` comment found immediately above this function "
@@ -305,7 +324,7 @@ def render_struct_section(st):
     out = ["## `struct {}`\n".format(st["name"])]
     out.append("```vani\n{}\n```\n".format(st["body"]))
     if st["doc"]:
-        out.append(st["doc"] + "\n")
+        out.append(escape_latex_for_markdown(st["doc"]) + "\n")
     return "\n".join(out) + "\n"
 
 
