@@ -1295,3 +1295,364 @@ fn sym_integrate(arena: mut ref Vec<ExprNode>, root: i64, var_id: i64) -> SymInt
 
     return SymIntegrateResult { ok: false, idx: 0 - 1 };
 }
+
+// ── v0.6.0+: Polynomial factorization (rational roots + synthetic division) ──
+//
+// Folds in what would have been a separate `vani-polyalgebra` repo, per
+// the roadmap's explicit "fold into vani-symbolic" decision. Scope:
+// the rational-root theorem (finds every EXACT rational root of an
+// integer-coefficient polynomial, verified via exact integer
+// arithmetic -- no floating-point error anywhere in detection) plus
+// synthetic division to reduce degree; a numeric fallback (reusing
+// vani-algebra's already-published `algebra_poly_deflate`) handles
+// repeated-root multiplicity and whatever's left once every rational
+// root is removed. Gröbner bases and factorization over anything but
+// the rationals stay out of scope, matching the roadmap's own explicit
+// framing ("mirroring vani-algebra's existing closed-form + numeric
+// fallback, real roots only precedent").
+//
+// Two API levels, mirroring vani-algebra's own convention of working
+// directly on ascending-degree coefficient vectors rather than forcing
+// everything through a symbolic tree:
+//   `poly_rational_roots`/`poly_factor_rational` -- take `Vec<i64>`
+//     directly; the actual algorithm, no `ExprNode` involved.
+//   `sym_poly_coeffs`/`sym_factor_rational` -- symbolic-tree wrappers,
+//     generalizing v0.5.0's `sym_poly_coeffs_le2` from degree<=2 to
+//     arbitrary degree (same recognized-shape discipline: `Num`,
+//     `Var(var_id)`, `Mul(Num,Var)`, `Pow(Var,Num=k)`,
+//     `Mul(Num,Pow(Var,Num=k))` -- an explicit `ok=false` for anything
+//     else, never a guess).
+
+struct PolyRationalRoot {
+    num: i64,
+    den: i64,
+}
+
+// q^deg * P(p/q), computed via exact integer arithmetic -- this IS the
+// rational-root-theorem remainder test: p/q is an exact root of `coeffs`
+// iff this returns 0. `deg` stays small for realistic symbolic-tree
+// polynomials, so i64 overflow isn't a practical concern here.
+// NO #[wcet]: loop bound is deg = len(coeffs)-1, a runtime value.
+#[bounded_stack(bytes = 112)]
+fn _poly_int_scaled_eval(coeffs: ref Vec<i64>, p: i64, q: i64) -> i64 {
+    let deg: i64 = (len(coeffs) as i64) - 1;
+    let sum: i64 = 0;
+    let k: i64 = 0;
+    while k <= deg {
+        let term: i64 = coeffs[k] * i64_pow(p, k) * i64_pow(q, deg - k);
+        sum = sum + term;
+        k = k + 1;
+    }
+    return sum;
+}
+
+// Every EXACT rational root of `coeffs` (ascending degree, integer,
+// `coeffs[deg] != 0`), via the rational-root theorem: any rational root
+// `p/q` in lowest terms must have `p` dividing the constant term and `q`
+// dividing the leading coefficient. Each candidate is verified via
+// `_poly_int_scaled_eval` (exact, no floats); `p`/`q` are only ever
+// accepted coprime, so no candidate is ever tested (or returned) twice
+// under two different representations of the same rational value. Finds
+// each DISTINCT rational root exactly once, even if it's a repeated
+// root of `coeffs` -- multiplicity is `poly_factor_rational`'s job, not
+// this function's (see its own comment for why).
+// NO #[wcet]: loop bounds are the divisor counts of coeffs[0]/coeffs[deg],
+// runtime values.
+#[bounded_stack(bytes = 408)]
+fn poly_rational_roots(coeffs: ref Vec<i64>) -> Vec<PolyRationalRoot> {
+    let deg: i64 = (len(coeffs) as i64) - 1;
+    assert deg >= 1;
+    let an: i64 = coeffs[deg];
+    assert an != 0;
+
+    let out: Vec<PolyRationalRoot> = vec();
+
+    // Rational-root-theorem divisor enumeration needs a NONZERO constant
+    // term (every p "divides" 0, which isn't a useful bound). Factor out
+    // `x` as many times as the constant term is exactly 0 first -- each
+    // removal is itself an exact root at 0 -- leaving `reduced` with a
+    // genuinely nonzero constant term (or degree 0, if `coeffs` was a
+    // pure power of `x` times a constant).
+    let reduced: Vec<i64> = vec();
+    let n: i64 = len(coeffs) as i64;
+    let i: i64 = 0;
+    while i < n {
+        push(mut ref reduced, coeffs[i]);
+        i = i + 1;
+    }
+    while (len(ref reduced) as i64) > 1 && reduced[0] == 0 {
+        push(mut ref out, PolyRationalRoot { num: 0, den: 1 });
+        let shifted: Vec<i64> = vec();
+        let rn: i64 = len(ref reduced) as i64;
+        let k: i64 = 1;
+        while k < rn {
+            push(mut ref shifted, reduced[k]);
+            k = k + 1;
+        }
+        reduced = shifted;
+    }
+
+    let rdeg: i64 = (len(ref reduced) as i64) - 1;
+    if rdeg >= 1 {
+        let a0: i64 = reduced[0];
+        let ran: i64 = reduced[rdeg];
+        let abs_a0: i64 = abs(a0);
+        let abs_an: i64 = abs(ran);
+        let p: i64 = 1;
+        while p <= abs_a0 {
+            if abs_a0 - (abs_a0 / p) * p == 0 {
+                let q: i64 = 1;
+                while q <= abs_an {
+                    if abs_an - (abs_an / q) * q == 0 {
+                        if i64_gcd(p, q) == 1 {
+                            if _poly_int_scaled_eval(ref reduced, p, q) == 0 {
+                                push(mut ref out, PolyRationalRoot { num: p, den: q });
+                            }
+                            if _poly_int_scaled_eval(ref reduced, 0 - p, q) == 0 {
+                                push(mut ref out, PolyRationalRoot { num: 0 - p, den: q });
+                            }
+                        }
+                    }
+                    q = q + 1;
+                }
+            }
+            p = p + 1;
+        }
+    }
+    return out;
+}
+
+#[bounded_stack(bytes = 112)]
+fn _poly_coeffs_i64_to_f64(coeffs: ref Vec<i64>) -> Vec<f64> {
+    let out: Vec<f64> = vec();
+    let n: i64 = len(coeffs) as i64;
+    let i: i64 = 0;
+    while i < n {
+        push(mut ref out, coeffs[i] as f64);
+        i = i + 1;
+    }
+    return out;
+}
+
+// Horner evaluation, ascending-degree coefficients.
+// NO #[wcet]: loop bound is len(coeffs), a runtime value.
+#[bounded_stack(bytes = 96)]
+fn _poly_eval_f64(coeffs: ref Vec<f64>, x: f64) -> f64 {
+    let n: i64 = len(coeffs) as i64;
+    let result: f64 = 0.0;
+    let i: i64 = n - 1;
+    while i >= 0 {
+        result = result * x + coeffs[i];
+        i = i - 1;
+    }
+    return result;
+}
+
+struct PolyFactorResult {
+    roots: Vec<f64>,
+    remainder: Vec<f64>,
+}
+
+// Repeatedly divides every rational root found by `poly_rational_roots`
+// out of `coeffs` via synthetic division (`algebra::algebra_poly_deflate`
+// -- vani-algebra's own already-published, already-tested deflation
+// step, reused rather than reimplemented). `roots` is returned WITH
+// multiplicity, WITHOUT re-running the exact-integer rational-root
+// search on each reduced polynomial: for each distinct candidate found
+// on the ORIGINAL `coeffs`, this keeps deflating by that same value as
+// long as the CURRENT reduced (f64) polynomial still evaluates to ~0
+// there. This correctly recovers multiplicity (e.g. `(x-2)^2*(x+1)`
+// -> roots `[2, 2, -1]`) via a numeric epsilon check on the reduced
+// polynomial rather than a second exact-integer pass -- a deliberate,
+// documented scope choice, not an oversight: repeating the exact search
+// after every deflation would need re-deriving integer coefficients
+// from `algebra_poly_deflate`'s f64 output, adding real complexity for
+// a case (multiplicity > 1 on an already-machine-precision-exact
+// synthetic division) where the numeric check is already reliable.
+// `remainder` is what's left after every found rational root (with
+// multiplicity) is divided out -- either a constant (fully factored
+// over the rationals) or an irreducible-over-the-rationals polynomial
+// with no further rational roots. Its real (possibly irrational) roots
+// can still be found numerically via `algebra::algebra_poly_roots_real`,
+// reused rather than reimplemented, matching the roadmap's own
+// "closed-form + numeric fallback" framing for this whole phase.
+// NO #[wcet]: loop bounds depend on the number of rational roots found
+// and their multiplicities, runtime values.
+#[bounded_stack(bytes = 656)]
+fn poly_factor_rational(coeffs: ref Vec<i64>) -> PolyFactorResult {
+    let candidates: Vec<PolyRationalRoot> = poly_rational_roots(coeffs);
+    let cur: Vec<f64> = _poly_coeffs_i64_to_f64(coeffs);
+    let roots: Vec<f64> = vec();
+
+    let n: i64 = len(ref candidates) as i64;
+    let i: i64 = 0;
+    while i < n {
+        let root: PolyRationalRoot = candidates[i];
+        let rv: f64 = (root.num as f64) / (root.den as f64);
+        let deg: i64 = (len(ref cur) as i64) - 1;
+        while deg >= 1 && abs(_poly_eval_f64(ref cur, rv)) < 1.0e-7 {
+            push(mut ref roots, rv);
+            cur = algebra::algebra_poly_deflate(ref cur, rv);
+            deg = (len(ref cur) as i64) - 1;
+        }
+        i = i + 1;
+    }
+    return PolyFactorResult { roots: roots, remainder: cur };
+}
+
+// ── Symbolic-tree wrappers ────────────────────────────────────────────
+
+struct SymVarPowerShape {
+    ok: bool,
+    k: i64,
+}
+
+// Recognizes `Pow(Var(var_id), Num=k)` for any `k >= 0` -- generalizes
+// v0.5.0's `_sym_is_var_squared` (hardcoded `k == 2`) to arbitrary
+// degree. `k == 0` can't actually occur post-`sym_simplify` (the `x^0`
+// identity already folds it to `Num(1)`), checked anyway for defense.
+#[bounded_stack(bytes = 248)]
+#[wcet(cycles = 104)]
+fn _sym_var_power_shape(dst: ref Vec<ExprNode>, idx: i64, var_id: i64) -> SymVarPowerShape {
+    let node: ExprNode = dst[idx];
+    if node.kind != 6 {
+        return SymVarPowerShape { ok: false, k: 0 };
+    }
+    let base: ExprNode = dst[node.left];
+    let exp: ExprNode = dst[node.right];
+    if base.kind == 1 && base.value == var_id && exp.kind == 0 && exp.value >= 0 {
+        return SymVarPowerShape { ok: true, k: exp.value };
+    }
+    return SymVarPowerShape { ok: false, k: 0 };
+}
+
+// Grows `coeffs` with trailing zeros so index `k` is valid -- the
+// dynamic-length equivalent of v0.5.0's fixed `c0`/`c1`/`c2` struct
+// fields, needed here since the degree isn't known ahead of time.
+// NO #[wcet]: loop bound is a runtime value (how many slots are missing).
+#[bounded_stack(bytes = 56)]
+fn _poly_coeffs_grow(coeffs: mut ref Vec<i64>, k: i64) -> i64 {
+    while (len(coeffs) as i64) <= k {
+        push(coeffs, 0);
+    }
+    return 0;
+}
+
+struct SymPolyCoeffsResult {
+    ok: bool,
+    coeffs: Vec<i64>,
+}
+
+// Extracts ascending-degree integer coefficients from a symbolic
+// expression tree, generalizing v0.5.0's `sym_poly_coeffs_le2` (degree
+// <=2 only, fixed `c0`/`c1`/`c2` fields) to arbitrary degree via a
+// dynamically-grown `Vec<i64>`. Same extraction pipeline: reuses
+// `_sym_flatten_sum` (the proven Add/Sub walker `sym_simplify`'s own
+// Layer 2 already uses) to un-nest the top-level sum, `sym_simplify`s
+// each term individually, then classifies each simplified term into one
+// of five recognized shapes (`Num`, `Var(var_id)`,
+// `Mul(Num,Var)`/`Mul(Var,Num)`, `Pow(Var,Num=k)`,
+// `Mul(Num,Pow)`/`Mul(Pow,Num)`) via `_sym_var_power_shape`. Any other
+// shape (`x*y`, `x^x`, `sin(x)`, an unrelated variable, ...) returns an
+// explicit `ok=false` -- not a guess, same discipline every extractor in
+// this file uses. Deliberately NOT a general polynomial normalizer (no
+// expansion/collection across products) -- `sym_simplify`'s own v0.2.0
+// header already documents that as out of scope.
+// NO #[wcet]: recursion/loop bounds are the number of flattened terms
+// and the tree depth, runtime values.
+fn sym_poly_coeffs(src: ref Vec<ExprNode>, root: i64, var_id: i64) -> SymPolyCoeffsResult {
+    let signs: Vec<i64> = vec();
+    let terms: Vec<i64> = vec();
+    _sym_flatten_sum(src, root, mut ref signs, mut ref terms, 1);
+
+    let dst: Vec<ExprNode> = sym_arena_new();
+    let coeffs: Vec<i64> = vec();
+    let n: i64 = len(ref terms) as i64;
+    let i: i64 = 0;
+    while i < n {
+        let s: i64 = signs[i];
+        let t: i64 = terms[i];
+        let simplified: i64 = sym_simplify(src, t, mut ref dst);
+        let node: ExprNode = dst[simplified];
+
+        if node.kind == 0 {
+            _poly_coeffs_grow(mut ref coeffs, 0);
+            set(mut ref coeffs, 0, coeffs[0] + s * node.value);
+        } else if node.kind == 1 && node.value == var_id {
+            _poly_coeffs_grow(mut ref coeffs, 1);
+            set(mut ref coeffs, 1, coeffs[1] + s);
+        } else if node.kind == 4 {
+            let lch: ExprNode = dst[node.left];
+            let rch: ExprNode = dst[node.right];
+            if lch.kind == 0 && rch.kind == 1 && rch.value == var_id {
+                _poly_coeffs_grow(mut ref coeffs, 1);
+                set(mut ref coeffs, 1, coeffs[1] + s * lch.value);
+            } else if rch.kind == 0 && lch.kind == 1 && lch.value == var_id {
+                _poly_coeffs_grow(mut ref coeffs, 1);
+                set(mut ref coeffs, 1, coeffs[1] + s * rch.value);
+            } else {
+                let rpow: SymVarPowerShape = _sym_var_power_shape(ref dst, node.right, var_id);
+                let lpow: SymVarPowerShape = _sym_var_power_shape(ref dst, node.left, var_id);
+                if lch.kind == 0 && rpow.ok {
+                    _poly_coeffs_grow(mut ref coeffs, rpow.k);
+                    set(mut ref coeffs, rpow.k, coeffs[rpow.k] + s * lch.value);
+                } else if rch.kind == 0 && lpow.ok {
+                    _poly_coeffs_grow(mut ref coeffs, lpow.k);
+                    set(mut ref coeffs, lpow.k, coeffs[lpow.k] + s * rch.value);
+                } else {
+                    let empty_coeffs_mul: Vec<i64> = vec();
+                    return SymPolyCoeffsResult { ok: false, coeffs: empty_coeffs_mul };
+                }
+            }
+        } else {
+            let pw: SymVarPowerShape = _sym_var_power_shape(ref dst, simplified, var_id);
+            if pw.ok {
+                _poly_coeffs_grow(mut ref coeffs, pw.k);
+                set(mut ref coeffs, pw.k, coeffs[pw.k] + s);
+            } else {
+                let empty_coeffs_other: Vec<i64> = vec();
+                return SymPolyCoeffsResult { ok: false, coeffs: empty_coeffs_other };
+            }
+        }
+        i = i + 1;
+    }
+
+    if (len(ref coeffs) as i64) == 0 {
+        push(mut ref coeffs, 0);
+    }
+    let top: i64 = (len(ref coeffs) as i64) - 1;
+    while top > 0 && coeffs[top] == 0 {
+        let _popped: i64 = pop(mut ref coeffs);
+        top = top - 1;
+    }
+    return SymPolyCoeffsResult { ok: true, coeffs: coeffs };
+}
+
+struct SymFactorResult {
+    ok: bool,
+    roots: Vec<f64>,
+    remainder: Vec<f64>,
+}
+
+// The symbolic-tree entry point: extracts integer coefficients via
+// `sym_poly_coeffs`, then hands off to `poly_factor_rational`. `ok`
+// covers BOTH failure modes -- an unrecognized expression shape, and a
+// degenerate/constant expression (`deg < 1`, same "no `[c0,c1,c2]`
+// fits a Vec<f64> answer" reasoning v0.5.0's own solver uses for a
+// constant input).
+fn sym_factor_rational(src: ref Vec<ExprNode>, root: i64, var_id: i64) -> SymFactorResult {
+    let extracted: SymPolyCoeffsResult = sym_poly_coeffs(src, root, var_id);
+    if extracted.ok == false {
+        let no_roots_shape: Vec<f64> = vec();
+        let no_remainder_shape: Vec<f64> = vec();
+        return SymFactorResult { ok: false, roots: no_roots_shape, remainder: no_remainder_shape };
+    }
+    let deg: i64 = (len(ref extracted.coeffs) as i64) - 1;
+    if deg < 1 {
+        let no_roots_deg: Vec<f64> = vec();
+        let no_remainder_deg: Vec<f64> = vec();
+        return SymFactorResult { ok: false, roots: no_roots_deg, remainder: no_remainder_deg };
+    }
+    let result: PolyFactorResult = poly_factor_rational(ref extracted.coeffs);
+    return SymFactorResult { ok: true, roots: result.roots, remainder: result.remainder };
+}

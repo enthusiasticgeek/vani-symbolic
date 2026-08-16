@@ -1,11 +1,15 @@
 # vani-symbolic — TODO
 
 > Compiler builtins that already exist and must NOT be reimplemented:
-> `push` `len` `vec` `i64_to_str` `clone_at`
+> `push` `len` `vec` `pop` `set` `abs` `i64_gcd` `i64_pow` `i64_to_str`
+> `clone_at`
 >
 > Self-contained through v0.3.0. v0.5.0 adds `algebra` as a real
-> production dependency (equation solving); `calculus` remains
-> tests/examples-only (differentiation's cross-check).
+> production dependency (equation solving), reused again in v0.6.0+
+> (factorization, via `algebra_poly_deflate`); `calculus` remains
+> tests/examples-only (differentiation's cross-check). Every phase is
+> now shipped -- v0.1.0 through v0.6.0+ per the roadmap's own phase
+> numbering, published as package versions 0.1.0 through 0.7.0.
 
 ---
 
@@ -417,17 +421,117 @@ linear `u`-substitution shapes (`(ax+b)^n`).
 
 ---
 
+## v0.6.0+ — Implemented ✓ (published as package version 0.7.0)
+
+Folds in what would have been a separate `vani-polyalgebra` repo, per
+the roadmap's explicit "fold into vani-symbolic" decision. Scope:
+rational-root theorem + synthetic division. Gröbner bases and
+factorization over anything but the rationals stay out of scope,
+matching the roadmap's own explicit framing.
+
+Published as package version `0.7.0` (not literally `0.6.0`), for the
+same reason v0.4.0 above published as `0.6.0`: `vani.toml` was already
+past that number by the time this phase landed.
+
+### Coefficient-vector level (2 public functions + 3 private helpers)
+- [x] `poly_rational_roots(coeffs)` -- every EXACT rational root of an
+      ascending-degree integer coefficient `Vec<i64>`, via the
+      rational-root theorem (`p` divides the constant term, `q` divides
+      the leading coefficient, `gcd(p,q)=1`). Each candidate is verified
+      by `_poly_int_scaled_eval` -- `q^deg * P(p/q)`, computed via exact
+      integer arithmetic (multiplying through, never dividing), so
+      detection has zero floating-point error. Handles a zero constant
+      term correctly by first factoring out `x` as many times as the
+      constant term is exactly 0 (each removal is itself an exact root
+      at 0) before applying the standard divisor enumeration to what's
+      left -- an actual bug caught by `tests/test_factor.vani`'s own
+      `x^2-4x` case on the first test run (the initial version only
+      special-cased "push root 0 once" and then skipped searching for
+      any OTHER root whenever the constant term was 0).
+- [x] `poly_factor_rational(coeffs)` -- repeatedly divides every
+      rational root found by `poly_rational_roots` out of `coeffs` via
+      synthetic division, reusing `algebra::algebra_poly_deflate`
+      (vani-algebra's own already-published deflation step) rather than
+      reimplementing it. Returns roots WITH multiplicity via a numeric
+      epsilon check on the reduced polynomial (re-tests the same
+      candidate value against the CURRENT reduced polynomial after each
+      deflation, rather than re-running the exact-integer search) -- a
+      deliberate, documented scope choice: repeating the exact search
+      after every deflation would need re-deriving integer coefficients
+      from `algebra_poly_deflate`'s `f64` output, for a case
+      (post-synthetic-division multiplicity) where the numeric check is
+      already reliable. `remainder` is whatever's left after every
+      rational root (with multiplicity) is removed -- a constant if
+      fully factored over the rationals, else an irreducible-over-the-
+      rationals polynomial whose real (possibly irrational) roots can
+      still be found numerically via the already-published
+      `algebra::algebra_poly_roots_real`.
+
+### Symbolic-tree wrappers (2 public functions + 2 private helpers)
+- [x] `sym_poly_coeffs(src, root, var_id)` -- generalizes v0.5.0's
+      `sym_poly_coeffs_le2` from a fixed degree<=2 `c0`/`c1`/`c2` struct
+      to an arbitrary-degree, dynamically-grown `Vec<i64>`, via the same
+      `_sym_flatten_sum` + per-term `sym_simplify` + shape-classification
+      pipeline (`_sym_var_power_shape` generalizes `_sym_is_var_squared`
+      from hardcoded `k==2` to any `k>=0`). Same explicit `ok=false`
+      discipline for any unrecognized term shape.
+- [x] `sym_factor_rational(src, root, var_id)` -- the symbolic entry
+      point: `sym_poly_coeffs` then `poly_factor_rational`. `ok=false`
+      covers both an unrecognized shape and a degenerate/constant
+      expression (same "no `Vec<f64>` answer fits" reasoning v0.5.0's
+      solver already uses for a constant input).
+
+### Tests
+- [x] `tests/test_factor.vani` (12 `#[test]`s) -- rational-root
+      detection (integer roots, a genuine fraction `3/2`, no roots
+      `x^2+1`, a zero constant term `x^2-4x`, a non-1 leading
+      coefficient `2x^2-8`), full factorization (three distinct integer
+      roots, a repeated root confirming multiplicity recovery via
+      `count_f64_root`, and a partial case with one rational root plus
+      an irrational `x^2-2` remainder left correctly unfactored),
+      symbolic-tree extraction matching a hand-derived coefficient
+      vector, an unrecognized-shape case (`x*x`), and the composed
+      symbolic entry point end to end.
+- [x] `examples/factor_demo.vani` -- the cubic-with-three-roots,
+      repeated-root, and partial-irrational-remainder cases at the
+      coefficient-vector level plus the symbolic-tree entry point,
+      verified on both backends with identical output.
+
+### Safety annotations
+- [x] `vanic audit-safety` reports full clean coverage. `poly_rational_roots`
+      (272 -> 408 bytes after the zero-constant-term fix widened its
+      local bindings), `_poly_int_scaled_eval`, `_poly_coeffs_i64_to_f64`,
+      `_poly_eval_f64`, `poly_factor_rational` (520 -> 656 bytes, same
+      reason, via its call chain), `_poly_coeffs_grow`, and
+      `_sym_var_power_shape` all got real, exact-from-the-checker
+      `#[bounded_stack]`/`#[wcet]` values (not hand-derived -- two of
+      them needed the value updated after the zero-constant-term fix
+      changed the function body, another real-world confirmation of why
+      this project's MAINT-1 discipline insists on the checker's number,
+      never a guess, even on a "small" follow-up edit).
+- [x] Full `vanic check` (real SMT verification, no `VANIC_NO_VERIFY`)
+      passes clean.
+
+### A real bug this phase's own tests caught
+`poly_rational_roots`'s first version only handled a zero constant term
+by pushing `root=0` once and then skipping the entire divisor-enumeration
+search (since it was gated on `a0 != 0`) -- meaning `x^2-4x = x(x-4)`
+would report ONLY the root `0`, silently missing `4`. Caught immediately
+by `tests/test_factor.vani`'s `test_rational_roots_zero_constant_term`
+on the very first test run (not found "by inspection" -- the bug shipped
+into the first test pass and was caught there, which is the whole point
+of writing the test before calling the phase done). Fixed by factoring
+out `x` as many times as the constant term is exactly 0, continuing
+divisor enumeration on what's left, rather than special-casing just the
+first zero.
+
+---
+
 ## Future
 
-Phased breakdown (versions proposed, not committed) tracked in
-[kosh-index/ROADMAP.md](https://github.com/enthusiasticgeek/kosh-index/blob/main/ROADMAP.md)'s
-`vani-symbolic` scoping section. Each phase needs its own
-confirm-before-starting, same discipline as this package itself.
+Only the `BigInt`-backed `Num` values idea remains, not tied to a
+specific version:
 
-- **v0.6.0+: Polynomial factorization** -- folds in what would have
-  been a separate `vani-polyalgebra` repo (rational-root theorem +
-  synthetic division). Gröbner bases stay out of scope unless a real
-  use case shows up. Not started.
 - **`BigInt`-backed `Num` values** -- a `Vec<BigInt>` side table
   (parallel to `SymbolTable.names`), reinterpreting `Num.value` as an
   index rather than a literal. No `ExprNode` shape change needed when

@@ -1,0 +1,69 @@
+// A quick tour of vani-symbolic v0.6.0+'s polynomial factorization:
+// rational-root theorem + synthetic division, both at the raw
+// Vec<i64>-coefficient level and through the symbolic-tree wrapper.
+// Run with:  vanic run examples/factor_demo.vani
+//    and:    vanic run --backend=c examples/factor_demo.vani
+
+use "../src/lib.vani";
+
+fn print_f64_vec(v: Vec<f64>) -> i64 {
+    let n: i64 = len(ref v) as i64;
+    let i: i64 = 0;
+    while i < n {
+        print v[i];
+        i = i + 1;
+    }
+    return 0;
+}
+
+fn main() -> i64 {
+    // ---- x^3 - 6x^2 + 11x - 6 = (x-1)(x-2)(x-3) ----
+    let c1: Vec<i64> = vec(0 - 6);
+    push(mut ref c1, 11);
+    push(mut ref c1, 0 - 6);
+    push(mut ref c1, 1);
+    print "x^3 - 6x^2 + 11x - 6, roots:";
+    let r1: PolyFactorResult = poly_factor_rational(ref c1);
+    let _p1: i64 = print_f64_vec(r1.roots);
+    print "  remainder (fully factored -> constant):";
+    let _p1b: i64 = print_f64_vec(r1.remainder);
+
+    // ---- (x-2)^2 * (x+1) = x^3 - 3x^2 + 4 -- repeated root ----
+    let c2: Vec<i64> = vec(4);
+    push(mut ref c2, 0);
+    push(mut ref c2, 0 - 3);
+    push(mut ref c2, 1);
+    print "x^3 - 3x^2 + 4, roots (2 has multiplicity 2):";
+    let r2: PolyFactorResult = poly_factor_rational(ref c2);
+    let _p2: i64 = print_f64_vec(r2.roots);
+
+    // ---- (x-1)*(x^2-2) -- one rational root, irrational remainder ----
+    let c3: Vec<i64> = vec(2);
+    push(mut ref c3, 0 - 2);
+    push(mut ref c3, 0 - 1);
+    push(mut ref c3, 1);
+    print "(x-1)*(x^2-2), rational roots:";
+    let r3: PolyFactorResult = poly_factor_rational(ref c3);
+    let _p3: i64 = print_f64_vec(r3.roots);
+    print "  remainder (x^2-2, no rational roots -- left unfactored):";
+    let _p3b: i64 = print_f64_vec(r3.remainder);
+
+    // ---- Symbolic entry point: same cubic as c1, built from ExprNode ----
+    let arena: Vec<ExprNode> = sym_arena_new();
+    let table: SymbolTable = symtab_new();
+    let vid: i64 = symtab_intern(mut ref table, "x");
+    let x: i64 = sym_var(mut ref arena, mut ref table, "x");
+    let x_cubed: i64 = sym_pow(mut ref arena, x, sym_num(mut ref arena, 3));
+    let x_sq: i64 = sym_pow(mut ref arena, x, sym_num(mut ref arena, 2));
+    let six_x_sq: i64 = sym_mul(mut ref arena, sym_num(mut ref arena, 6), x_sq);
+    let eleven_x: i64 = sym_mul(mut ref arena, sym_num(mut ref arena, 11), x);
+    let step1: i64 = sym_sub(mut ref arena, x_cubed, six_x_sq);
+    let step2: i64 = sym_add(mut ref arena, step1, eleven_x);
+    let expr: i64 = sym_sub(mut ref arena, step2, sym_num(mut ref arena, 6));
+
+    print "sym_factor_rational(x^3 - 6x^2 + 11x - 6), roots:";
+    let sr: SymFactorResult = sym_factor_rational(ref arena, expr, vid);
+    let _p4: i64 = print_f64_vec(sr.roots);
+
+    return 0;
+}

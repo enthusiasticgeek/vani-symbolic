@@ -1,10 +1,10 @@
 [package]
 name    = "symbolic"
-version = "0.6.0"
+version = "0.7.0"
 entry   = "src/lib.vani"
 authors = "enthusiasticgeek"
 license = "MIT"
-description = "Symbolic-math (CAS) foundation for vāṇी: flat-arena expression trees, numeric evaluation, precedence-aware pretty-printing, simplification (constant folding, identities, like-term collection), symbolic differentiation (sum/product/quotient/power+chain rules), equation solving (linear/quadratic, via vani-algebra), and polynomial integration (power/sum/constant-multiple rules plus linear u-substitution)."
+description = "Symbolic-math (CAS) foundation for vāṇी: flat-arena expression trees, numeric evaluation, precedence-aware pretty-printing, simplification (constant folding, identities, like-term collection), symbolic differentiation (sum/product/quotient/power+chain rules), equation solving (linear/quadratic, via vani-algebra), polynomial integration (power/sum/constant-multiple rules plus linear u-substitution), and polynomial factorization (rational-root theorem + synthetic division, via vani-algebra)."
 registry = "kosh"
 
 [deps]

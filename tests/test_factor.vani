@@ -1,0 +1,221 @@
+use "../src/lib.vani";
+
+// v0.6.0+: polynomial factorization (rational-root theorem + synthetic
+// division). Rational-root detection is exact (integer arithmetic, no
+// floats) -- these tests check exact roots directly. Multiplicity and
+// the "reduced remainder" results depend on numeric synthetic division
+// (reused from vani-algebra), so those are checked with a small epsilon.
+
+fn close(a: f64, b: f64) -> bool {
+    return abs(a - b) < 1.0e-6;
+}
+
+fn has_root(roots: ref Vec<PolyRationalRoot>, num: i64, den: i64) -> bool {
+    let n: i64 = len(roots) as i64;
+    let i: i64 = 0;
+    while i < n {
+        if roots[i].num == num && roots[i].den == den {
+            return true;
+        }
+        i = i + 1;
+    }
+    return false;
+}
+
+fn has_f64_root(roots: ref Vec<f64>, v: f64) -> bool {
+    let n: i64 = len(roots) as i64;
+    let i: i64 = 0;
+    while i < n {
+        if close(roots[i], v) {
+            return true;
+        }
+        i = i + 1;
+    }
+    return false;
+}
+
+fn count_f64_root(roots: ref Vec<f64>, v: f64) -> i64 {
+    let n: i64 = len(roots) as i64;
+    let i: i64 = 0;
+    let c: i64 = 0;
+    while i < n {
+        if close(roots[i], v) {
+            c = c + 1;
+        }
+        i = i + 1;
+    }
+    return c;
+}
+
+#[test]
+fn test_rational_roots_quadratic_integer_roots() -> i64 {
+    // x^2 - 5x + 6 = (x-2)(x-3)
+    let coeffs: Vec<i64> = vec(6); push(mut ref coeffs, 0 - 5); push(mut ref coeffs, 1);
+    let roots: Vec<PolyRationalRoot> = poly_rational_roots(ref coeffs);
+    assert (len(ref roots) as i64) == 2;
+    assert has_root(ref roots, 2, 1);
+    assert has_root(ref roots, 3, 1);
+    return 0;
+}
+
+#[test]
+fn test_rational_roots_fractional_root() -> i64 {
+    // 2x - 3 = 0  ->  x = 3/2
+    let coeffs: Vec<i64> = vec(0 - 3); push(mut ref coeffs, 2);
+    let roots: Vec<PolyRationalRoot> = poly_rational_roots(ref coeffs);
+    assert (len(ref roots) as i64) == 1;
+    assert has_root(ref roots, 3, 2);
+    return 0;
+}
+
+#[test]
+fn test_rational_roots_none() -> i64 {
+    // x^2 + 1 -- no real (hence no rational) roots
+    let coeffs: Vec<i64> = vec(1); push(mut ref coeffs, 0); push(mut ref coeffs, 1);
+    let roots: Vec<PolyRationalRoot> = poly_rational_roots(ref coeffs);
+    assert (len(ref roots) as i64) == 0;
+    return 0;
+}
+
+#[test]
+fn test_rational_roots_zero_constant_term() -> i64 {
+    // x^2 - 4x = x(x-4)  ->  roots {0, 4}
+    let coeffs: Vec<i64> = vec(0); push(mut ref coeffs, 0 - 4); push(mut ref coeffs, 1);
+    let roots: Vec<PolyRationalRoot> = poly_rational_roots(ref coeffs);
+    assert (len(ref roots) as i64) == 2;
+    assert has_root(ref roots, 0, 1);
+    assert has_root(ref roots, 4, 1);
+    return 0;
+}
+
+#[test]
+fn test_rational_roots_leading_coefficient_not_one() -> i64 {
+    // 2x^2 - 8 = 0  ->  x = +-2
+    let coeffs: Vec<i64> = vec(0 - 8); push(mut ref coeffs, 0); push(mut ref coeffs, 2);
+    let roots: Vec<PolyRationalRoot> = poly_rational_roots(ref coeffs);
+    assert (len(ref roots) as i64) == 2;
+    assert has_root(ref roots, 2, 1);
+    assert has_root(ref roots, 0 - 2, 1);
+    return 0;
+}
+
+#[test]
+fn test_factor_cubic_three_integer_roots() -> i64 {
+    // x^3 - 6x^2 + 11x - 6 = (x-1)(x-2)(x-3)
+    let coeffs: Vec<i64> = vec(0 - 6); push(mut ref coeffs, 11); push(mut ref coeffs, 0 - 6); push(mut ref coeffs, 1);
+    let result: PolyFactorResult = poly_factor_rational(ref coeffs);
+    assert (len(ref result.roots) as i64) == 3;
+    assert has_f64_root(ref result.roots, 1.0);
+    assert has_f64_root(ref result.roots, 2.0);
+    assert has_f64_root(ref result.roots, 3.0);
+    // fully factored over the rationals -- remainder is a constant
+    assert (len(ref result.remainder) as i64) == 1;
+    assert close(result.remainder[0], 1.0);
+    return 0;
+}
+
+#[test]
+fn test_factor_repeated_root() -> i64 {
+    // (x-2)^2 * (x+1) = x^3 - 3x^2 + 4
+    let coeffs: Vec<i64> = vec(4); push(mut ref coeffs, 0); push(mut ref coeffs, 0 - 3); push(mut ref coeffs, 1);
+    let result: PolyFactorResult = poly_factor_rational(ref coeffs);
+    assert (len(ref result.roots) as i64) == 3;
+    assert count_f64_root(ref result.roots, 2.0) == 2;
+    assert count_f64_root(ref result.roots, 0 - 1.0) == 1;
+    assert (len(ref result.remainder) as i64) == 1;
+    assert close(result.remainder[0], 1.0);
+    return 0;
+}
+
+#[test]
+fn test_factor_partial_irrational_remainder() -> i64 {
+    // (x-1) * (x^2 - 2) -- one rational root (1), remainder x^2-2 has no
+    // rational roots (sqrt(2) is irrational) so it's left unfactored.
+    // Expanded: x^3 - x^2 - 2x + 2
+    let coeffs: Vec<i64> = vec(2); push(mut ref coeffs, 0 - 2); push(mut ref coeffs, 0 - 1); push(mut ref coeffs, 1);
+    let result: PolyFactorResult = poly_factor_rational(ref coeffs);
+    assert (len(ref result.roots) as i64) == 1;
+    assert has_f64_root(ref result.roots, 1.0);
+    assert (len(ref result.remainder) as i64) == 3;
+    // remainder should still evaluate to ~0 at +-sqrt(2)
+    let sqrt2: f64 = 1.4142135623730951;
+    assert abs(_poly_eval_f64(ref result.remainder, sqrt2)) < 1.0e-6;
+    return 0;
+}
+
+#[test]
+fn test_sym_poly_coeffs_matches_manual() -> i64 {
+    // x^3 - 6x^2 + 11x - 6, built symbolically
+    let arena: Vec<ExprNode> = sym_arena_new();
+    let table: SymbolTable = symtab_new();
+    let vid: i64 = symtab_intern(mut ref table, "x");
+    let x: i64 = sym_var(mut ref arena, mut ref table, "x");
+    let x_cubed: i64 = sym_pow(mut ref arena, x, sym_num(mut ref arena, 3));
+    let x_sq: i64 = sym_pow(mut ref arena, x, sym_num(mut ref arena, 2));
+    let six_x_sq: i64 = sym_mul(mut ref arena, sym_num(mut ref arena, 6), x_sq);
+    let eleven_x: i64 = sym_mul(mut ref arena, sym_num(mut ref arena, 11), x);
+    let step1: i64 = sym_sub(mut ref arena, x_cubed, six_x_sq);
+    let step2: i64 = sym_add(mut ref arena, step1, eleven_x);
+    let expr: i64 = sym_sub(mut ref arena, step2, sym_num(mut ref arena, 6));
+
+    let extracted: SymPolyCoeffsResult = sym_poly_coeffs(ref arena, expr, vid);
+    assert extracted.ok;
+    assert (len(ref extracted.coeffs) as i64) == 4;
+    assert extracted.coeffs[0] == (0 - 6);
+    assert extracted.coeffs[1] == 11;
+    assert extracted.coeffs[2] == (0 - 6);
+    assert extracted.coeffs[3] == 1;
+    return 0;
+}
+
+#[test]
+fn test_sym_poly_coeffs_unrecognized_shape_returns_not_ok() -> i64 {
+    // x*x -- not one of the recognized term shapes
+    let arena: Vec<ExprNode> = sym_arena_new();
+    let table: SymbolTable = symtab_new();
+    let vid: i64 = symtab_intern(mut ref table, "x");
+    let x: i64 = sym_var(mut ref arena, mut ref table, "x");
+    let expr: i64 = sym_mul(mut ref arena, x, x);
+
+    let extracted: SymPolyCoeffsResult = sym_poly_coeffs(ref arena, expr, vid);
+    assert extracted.ok == false;
+    return 0;
+}
+
+#[test]
+fn test_sym_factor_rational_composed() -> i64 {
+    // Same cubic as above, but through the full symbolic entry point.
+    let arena: Vec<ExprNode> = sym_arena_new();
+    let table: SymbolTable = symtab_new();
+    let vid: i64 = symtab_intern(mut ref table, "x");
+    let x: i64 = sym_var(mut ref arena, mut ref table, "x");
+    let x_cubed: i64 = sym_pow(mut ref arena, x, sym_num(mut ref arena, 3));
+    let x_sq: i64 = sym_pow(mut ref arena, x, sym_num(mut ref arena, 2));
+    let six_x_sq: i64 = sym_mul(mut ref arena, sym_num(mut ref arena, 6), x_sq);
+    let eleven_x: i64 = sym_mul(mut ref arena, sym_num(mut ref arena, 11), x);
+    let step1: i64 = sym_sub(mut ref arena, x_cubed, six_x_sq);
+    let step2: i64 = sym_add(mut ref arena, step1, eleven_x);
+    let expr: i64 = sym_sub(mut ref arena, step2, sym_num(mut ref arena, 6));
+
+    let result: SymFactorResult = sym_factor_rational(ref arena, expr, vid);
+    assert result.ok;
+    assert (len(ref result.roots) as i64) == 3;
+    assert has_f64_root(ref result.roots, 1.0);
+    assert has_f64_root(ref result.roots, 2.0);
+    assert has_f64_root(ref result.roots, 3.0);
+    return 0;
+}
+
+#[test]
+fn test_sym_factor_rational_degenerate_constant_returns_not_ok() -> i64 {
+    let arena: Vec<ExprNode> = sym_arena_new();
+    let table: SymbolTable = symtab_new();
+    let vid: i64 = symtab_intern(mut ref table, "x");
+    let five: i64 = sym_num(mut ref arena, 5);
+
+    let result: SymFactorResult = sym_factor_rational(ref arena, five, vid);
+    assert result.ok == false;
+    return 0;
+}
+
+fn main() -> i64 { return 0; }
