@@ -1010,3 +1010,288 @@ fn sym_solve_equation_le2(lsrc: ref Vec<ExprNode>, lhs: i64, rsrc: ref Vec<ExprN
     }
     return algebra::algebra_poly_roots_real(ref coeffs);
 }
+
+// ── v0.4.0: Symbolic integration (polynomial, fixed pattern table) ──────
+//
+// SCOPE CORRECTION found during implementation, not before: the
+// roadmap's original v0.4.0 scope text mentions "elementary
+// exp/ln/sin/cos antiderivatives", but `ExprNode`'s kind set has never
+// grown past the 8 kinds v0.1.0 shipped with (0=Num 1=Var 2=Add 3=Sub
+// 4=Mul 5=Div 6=Pow 7=Neg) -- adding transcendental-function kinds would
+// mean extending EVERY existing walker (`sym_eval`, `sym_diff`,
+// `sym_simplify`, `sym_to_str`, `sym_eq_structural`), a much larger
+// undertaking than "add integration" alone. Same kind of correction
+// v0.3.0 (`vani-tensor` never actually needed) and v0.5.0 (`vani-algebra`
+// itself needed a dependency-version bump) already made explicit here.
+// This phase covers POLYNOMIAL integration only, over the existing kind
+// set: power rule, sum/difference/constant-multiple rules, and a small
+// set of recognized linear-u-substitution shapes (`(a*x+b)^n`) -- the
+// realistic "small set of recognized shapes" the roadmap's own wording
+// already anticipated, just without the transcendental cases.
+//
+// Fixed pattern table, explicit no-match (same discipline
+// `sym_poly_coeffs_le2` already established for v0.5.0): every rule
+// either fires and returns `ok=true`, or the whole call returns
+// `ok=false` -- never a guess. Rules recognized:
+//   Num c                    -> c*x                (constant rule)
+//   Var(var_id)               -> x^2/2               (bare integration var)
+//   Var(other)                -> other*x             (treated as constant)
+//   Add(f,g) / Sub(f,g)       -> ∫f ± ∫g              (linearity)
+//   Neg(f)                    -> -∫f
+//   Mul(const,f) / Mul(f,const) where exactly one side doesn't contain
+//                                var_id              -> const * ∫f
+//   f/const (const doesn't contain var_id)           -> (∫f) / const
+//   Pow(Var(var_id), Num=n), n != -1                 -> x^(n+1)/(n+1)
+//   Pow(base, Num=n), n != -1, base doesn't contain
+//     var_id at all                                  -> base^n * x (constant)
+//   Pow(a*x+b, Num=n), n != -1, recognized linear
+//     base shape (`_sym_linear_shape` below)          -> (ax+b)^(n+1) / (a*(n+1))
+// Everything else (Pow with a variable/non-literal exponent, Pow with
+// n=-1, a product/quotient of two var_id-dependent factors, a
+// non-linear Pow base, ...) returns ok=false -- integration by parts,
+// partial fractions, and 1/x -> ln|x| are all out of scope, same
+// "not a general algorithm (no Risch)" boundary the roadmap already
+// drew.
+//
+// VALIDATION: every rule that fires is checked against the fundamental
+// theorem of calculus (sym_diff(result) evaluated at several sample
+// points ≈ the ORIGINAL expression evaluated at the same points) --
+// evaluation-based, not structural equality, matching the roadmap's own
+// explicit "post-simplification structural OR evaluated-at-sample-points
+// equality" allowance (sym_diff's raw output isn't simplified, so exact
+// structural equality to the original would be too strict a bar here).
+
+struct SymIntegrateResult {
+    ok: bool,
+    idx: i64,
+}
+
+// True if `idx` (or any descendant) is a Var node matching var_id --
+// the "does this subexpression depend on the integration variable"
+// check the constant-multiple and constant-Pow-base rules both need.
+// NO #[wcet]: recursion depth is the tree depth, a runtime value.
+fn _sym_contains_var(arena: mut ref Vec<ExprNode>, idx: i64, var_id: i64) -> bool {
+    let node: ExprNode = arena[idx];
+    if node.kind == 1 {
+        return node.value == var_id;
+    }
+    if node.kind == 0 {
+        return false;
+    }
+    if node.kind == 7 {
+        return _sym_contains_var(arena, node.left, var_id);
+    }
+    if _sym_contains_var(arena, node.left, var_id) {
+        return true;
+    }
+    return _sym_contains_var(arena, node.right, var_id);
+}
+
+struct SymLinearShape {
+    ok: bool,
+    a: i64,
+    b: i64,
+}
+
+// Recognizes a SMALL set of `a*x + b` shapes as actually built by this
+// file's own constructors (`Var`, `Mul(Num,Var)`/`Mul(Var,Num)`,
+// `Add`/`Sub` of one of those with a `Num`, and the commuted
+// `Add(Num, linear)` form) -- NOT the general degree<=2 extraction
+// `sym_poly_coeffs_le2` does for v0.5.0 (that function takes `ref`,
+// which can't be called from here: `arena` is already `mut ref` in
+// `sym_integrate`, and the checker doesn't reborrow a `mut ref` binding
+// as `ref` at a call site -- same limitation this file's own `sym_add`
+// comment already documents; a dedicated `mut ref`-native, purely
+// recursive helper sidesteps it instead of re-hitting it). `a == 0`
+// means "not recognized as linear", same as `ok == false`.
+// NO #[wcet]: recursion depth is the tree depth, a runtime value.
+fn _sym_linear_shape(arena: mut ref Vec<ExprNode>, idx: i64, var_id: i64) -> SymLinearShape {
+    let node: ExprNode = arena[idx];
+    if node.kind == 1 && node.value == var_id {
+        return SymLinearShape { ok: true, a: 1, b: 0 };
+    }
+    if node.kind == 4 {
+        let lch: ExprNode = arena[node.left];
+        let rch: ExprNode = arena[node.right];
+        if lch.kind == 0 && rch.kind == 1 && rch.value == var_id {
+            return SymLinearShape { ok: true, a: lch.value, b: 0 };
+        }
+        if rch.kind == 0 && lch.kind == 1 && lch.value == var_id {
+            return SymLinearShape { ok: true, a: rch.value, b: 0 };
+        }
+        return SymLinearShape { ok: false, a: 0, b: 0 };
+    }
+    if node.kind == 2 {
+        let rch: ExprNode = arena[node.right];
+        if rch.kind == 0 {
+            let l: SymLinearShape = _sym_linear_shape(arena, node.left, var_id);
+            if l.ok {
+                return SymLinearShape { ok: true, a: l.a, b: l.b + rch.value };
+            }
+        }
+        let lch: ExprNode = arena[node.left];
+        if lch.kind == 0 {
+            let r: SymLinearShape = _sym_linear_shape(arena, node.right, var_id);
+            if r.ok {
+                return SymLinearShape { ok: true, a: r.a, b: r.b + lch.value };
+            }
+        }
+        return SymLinearShape { ok: false, a: 0, b: 0 };
+    }
+    if node.kind == 3 {
+        let rch: ExprNode = arena[node.right];
+        if rch.kind == 0 {
+            let l: SymLinearShape = _sym_linear_shape(arena, node.left, var_id);
+            if l.ok {
+                return SymLinearShape { ok: true, a: l.a, b: l.b - rch.value };
+            }
+        }
+        return SymLinearShape { ok: false, a: 0, b: 0 };
+    }
+    return SymLinearShape { ok: false, a: 0, b: 0 };
+}
+
+// Constructs a fresh Var node referencing an ALREADY-KNOWN var_id
+// directly -- sym_integrate already has the var_id it's integrating
+// with respect to, so the SymbolTable machinery sym_var needs (to turn
+// a NAME into a var_id) doesn't apply here. Same low-level ExprNode
+// push sym_var itself does internally, minus the symtab_intern step.
+#[bounded_stack(bytes = 56)]
+#[wcet(cycles = 36)]
+fn _sym_var_ref(arena: mut ref Vec<ExprNode>, var_id: i64) -> i64 {
+    push(arena, ExprNode { kind: 1, value: var_id, left: 0 - 1, right: 0 - 1 });
+    return (len(arena) as i64) - 1;
+}
+
+// NO #[wcet]: recursion depth is the tree depth, a runtime value.
+fn sym_integrate(arena: mut ref Vec<ExprNode>, root: i64, var_id: i64) -> SymIntegrateResult {
+    let node: ExprNode = arena[root];
+
+    if node.kind == 0 {
+        let x: i64 = _sym_var_ref(arena, var_id);
+        let idx: i64 = sym_mul(arena, root, x);
+        return SymIntegrateResult { ok: true, idx: idx };
+    }
+
+    if node.kind == 1 {
+        if node.value == var_id {
+            let x_sq: i64 = sym_pow(arena, root, sym_num(arena, 2));
+            let idx: i64 = sym_div(arena, x_sq, sym_num(arena, 2));
+            return SymIntegrateResult { ok: true, idx: idx };
+        }
+        let x: i64 = _sym_var_ref(arena, var_id);
+        let idx: i64 = sym_mul(arena, root, x);
+        return SymIntegrateResult { ok: true, idx: idx };
+    }
+
+    if node.kind == 2 {
+        let li: SymIntegrateResult = sym_integrate(arena, node.left, var_id);
+        if li.ok == false {
+            return SymIntegrateResult { ok: false, idx: 0 - 1 };
+        }
+        let ri: SymIntegrateResult = sym_integrate(arena, node.right, var_id);
+        if ri.ok == false {
+            return SymIntegrateResult { ok: false, idx: 0 - 1 };
+        }
+        let idx: i64 = sym_add(arena, li.idx, ri.idx);
+        return SymIntegrateResult { ok: true, idx: idx };
+    }
+
+    if node.kind == 3 {
+        let li: SymIntegrateResult = sym_integrate(arena, node.left, var_id);
+        if li.ok == false {
+            return SymIntegrateResult { ok: false, idx: 0 - 1 };
+        }
+        let ri: SymIntegrateResult = sym_integrate(arena, node.right, var_id);
+        if ri.ok == false {
+            return SymIntegrateResult { ok: false, idx: 0 - 1 };
+        }
+        let idx: i64 = sym_sub(arena, li.idx, ri.idx);
+        return SymIntegrateResult { ok: true, idx: idx };
+    }
+
+    if node.kind == 7 {
+        let ci: SymIntegrateResult = sym_integrate(arena, node.left, var_id);
+        if ci.ok == false {
+            return SymIntegrateResult { ok: false, idx: 0 - 1 };
+        }
+        let idx: i64 = sym_neg(arena, ci.idx);
+        return SymIntegrateResult { ok: true, idx: idx };
+    }
+
+    if node.kind == 4 {
+        let l_has: bool = _sym_contains_var(arena, node.left, var_id);
+        let r_has: bool = _sym_contains_var(arena, node.right, var_id);
+        if l_has == false && r_has == true {
+            let ri: SymIntegrateResult = sym_integrate(arena, node.right, var_id);
+            if ri.ok == false {
+                return SymIntegrateResult { ok: false, idx: 0 - 1 };
+            }
+            let idx: i64 = sym_mul(arena, node.left, ri.idx);
+            return SymIntegrateResult { ok: true, idx: idx };
+        }
+        if r_has == false && l_has == true {
+            let li: SymIntegrateResult = sym_integrate(arena, node.left, var_id);
+            if li.ok == false {
+                return SymIntegrateResult { ok: false, idx: 0 - 1 };
+            }
+            let idx: i64 = sym_mul(arena, li.idx, node.right);
+            return SymIntegrateResult { ok: true, idx: idx };
+        }
+        if l_has == false && r_has == false {
+            let x: i64 = _sym_var_ref(arena, var_id);
+            let idx: i64 = sym_mul(arena, root, x);
+            return SymIntegrateResult { ok: true, idx: idx };
+        }
+        return SymIntegrateResult { ok: false, idx: 0 - 1 };
+    }
+
+    if node.kind == 5 {
+        let r_has: bool = _sym_contains_var(arena, node.right, var_id);
+        if r_has == false {
+            let li: SymIntegrateResult = sym_integrate(arena, node.left, var_id);
+            if li.ok == false {
+                return SymIntegrateResult { ok: false, idx: 0 - 1 };
+            }
+            let idx: i64 = sym_div(arena, li.idx, node.right);
+            return SymIntegrateResult { ok: true, idx: idx };
+        }
+        return SymIntegrateResult { ok: false, idx: 0 - 1 };
+    }
+
+    if node.kind == 6 {
+        let exp_node: ExprNode = arena[node.right];
+        if exp_node.kind != 0 {
+            return SymIntegrateResult { ok: false, idx: 0 - 1 };
+        }
+        let n: i64 = exp_node.value;
+        let base_has: bool = _sym_contains_var(arena, node.left, var_id);
+        if base_has == false {
+            let x: i64 = _sym_var_ref(arena, var_id);
+            let idx: i64 = sym_mul(arena, root, x);
+            return SymIntegrateResult { ok: true, idx: idx };
+        }
+        if n == 0 - 1 {
+            return SymIntegrateResult { ok: false, idx: 0 - 1 };
+        }
+        let base_node: ExprNode = arena[node.left];
+        if base_node.kind == 1 && base_node.value == var_id {
+            let x_np1: i64 = sym_pow(arena, node.left, sym_num(arena, n + 1));
+            let idx: i64 = sym_div(arena, x_np1, sym_num(arena, n + 1));
+            return SymIntegrateResult { ok: true, idx: idx };
+        }
+        let shape: SymLinearShape = _sym_linear_shape(arena, node.left, var_id);
+        if shape.ok && shape.a != 0 {
+            let np1: i64 = n + 1;
+            let denom: i64 = shape.a * np1;
+            if denom != 0 {
+                let base_np1: i64 = sym_pow(arena, node.left, sym_num(arena, np1));
+                let idx: i64 = sym_div(arena, base_np1, sym_num(arena, denom));
+                return SymIntegrateResult { ok: true, idx: idx };
+            }
+        }
+        return SymIntegrateResult { ok: false, idx: 0 - 1 };
+    }
+
+    return SymIntegrateResult { ok: false, idx: 0 - 1 };
+}

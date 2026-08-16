@@ -1,0 +1,230 @@
+use "../src/lib.vani";
+
+// v0.4.0: polynomial symbolic integration. Every rule that fires is
+// checked against the fundamental theorem of calculus: build f, compute
+// F = sym_integrate(f), then confirm sym_diff(F) evaluates to the SAME
+// i64 value as f itself at several sample points (sym_eval is entirely
+// i64 arithmetic -- no floats anywhere in this arena -- but every rule
+// here is power-rule-based, so the derivative's internal Div nodes
+// always cancel to an exact integer regardless of which integer sample
+// point is used; confirmed by hand before writing these, not assumed).
+// This mirrors v0.3.0's own evaluation-based (not structural) validation
+// approach for sym_diff.
+
+fn check_ftc(arena: ref Vec<ExprNode>, f: i64, darena: ref Vec<ExprNode>, d: i64, x: i64) -> bool {
+    let vv: Vec<i64> = vec(x);
+    return sym_eval(arena, f, ref vv) == sym_eval(darena, d, ref vv);
+}
+
+#[test]
+fn test_integrate_constant() -> i64 {
+    // ∫5 dx = 5x
+    let arena: Vec<ExprNode> = sym_arena_new();
+    let f: i64 = sym_num(mut ref arena, 5);
+
+    let r: SymIntegrateResult = sym_integrate(mut ref arena, f, 0);
+    assert r.ok;
+    let d: i64 = sym_diff(mut ref arena, r.idx, 0);
+
+    assert check_ftc(ref arena, f, ref arena, d, 0);
+    assert check_ftc(ref arena, f, ref arena, d, 3);
+    assert check_ftc(ref arena, f, ref arena, d, 0 - 2);
+    return 0;
+}
+
+#[test]
+fn test_integrate_bare_var() -> i64 {
+    // ∫x dx = x^2/2
+    let arena: Vec<ExprNode> = sym_arena_new();
+    let table: SymbolTable = symtab_new();
+    let vid: i64 = symtab_intern(mut ref table, "x");
+    let f: i64 = sym_var(mut ref arena, mut ref table, "x");
+
+    let r: SymIntegrateResult = sym_integrate(mut ref arena, f, vid);
+    assert r.ok;
+    let d: i64 = sym_diff(mut ref arena, r.idx, vid);
+
+    assert check_ftc(ref arena, f, ref arena, d, 1);
+    assert check_ftc(ref arena, f, ref arena, d, 4);
+    assert check_ftc(ref arena, f, ref arena, d, 0 - 3);
+    return 0;
+}
+
+#[test]
+fn test_integrate_power_rule() -> i64 {
+    // ∫x^3 dx = x^4/4
+    let arena: Vec<ExprNode> = sym_arena_new();
+    let table: SymbolTable = symtab_new();
+    let vid: i64 = symtab_intern(mut ref table, "x");
+    let x: i64 = sym_var(mut ref arena, mut ref table, "x");
+    let f: i64 = sym_pow(mut ref arena, x, sym_num(mut ref arena, 3));
+
+    let r: SymIntegrateResult = sym_integrate(mut ref arena, f, vid);
+    assert r.ok;
+    let d: i64 = sym_diff(mut ref arena, r.idx, vid);
+
+    assert check_ftc(ref arena, f, ref arena, d, 2);
+    assert check_ftc(ref arena, f, ref arena, d, 0 - 2);
+    return 0;
+}
+
+#[test]
+fn test_integrate_sum_and_difference() -> i64 {
+    // f(x) = x^2 + 3x - 5  (Pow, Mul-by-const, Add, Sub, Num all exercised)
+    let arena: Vec<ExprNode> = sym_arena_new();
+    let table: SymbolTable = symtab_new();
+    let vid: i64 = symtab_intern(mut ref table, "x");
+    let x: i64 = sym_var(mut ref arena, mut ref table, "x");
+    let x_sq: i64 = sym_pow(mut ref arena, x, sym_num(mut ref arena, 2));
+    let three_x: i64 = sym_mul(mut ref arena, sym_num(mut ref arena, 3), x);
+    let step1: i64 = sym_add(mut ref arena, x_sq, three_x);
+    let f: i64 = sym_sub(mut ref arena, step1, sym_num(mut ref arena, 5));
+
+    let r: SymIntegrateResult = sym_integrate(mut ref arena, f, vid);
+    assert r.ok;
+    let d: i64 = sym_diff(mut ref arena, r.idx, vid);
+
+    assert check_ftc(ref arena, f, ref arena, d, 0);
+    assert check_ftc(ref arena, f, ref arena, d, 5);
+    assert check_ftc(ref arena, f, ref arena, d, 0 - 4);
+    return 0;
+}
+
+#[test]
+fn test_integrate_neg() -> i64 {
+    // ∫-(x^2) dx
+    let arena: Vec<ExprNode> = sym_arena_new();
+    let table: SymbolTable = symtab_new();
+    let vid: i64 = symtab_intern(mut ref table, "x");
+    let x: i64 = sym_var(mut ref arena, mut ref table, "x");
+    let x_sq: i64 = sym_pow(mut ref arena, x, sym_num(mut ref arena, 2));
+    let f: i64 = sym_neg(mut ref arena, x_sq);
+
+    let r: SymIntegrateResult = sym_integrate(mut ref arena, f, vid);
+    assert r.ok;
+    let d: i64 = sym_diff(mut ref arena, r.idx, vid);
+
+    assert check_ftc(ref arena, f, ref arena, d, 3);
+    assert check_ftc(ref arena, f, ref arena, d, 0 - 1);
+    return 0;
+}
+
+#[test]
+fn test_integrate_constant_multiple() -> i64 {
+    // ∫3*x^2 dx  -- Mul(Num,f) constant-multiple rule
+    let arena: Vec<ExprNode> = sym_arena_new();
+    let table: SymbolTable = symtab_new();
+    let vid: i64 = symtab_intern(mut ref table, "x");
+    let x: i64 = sym_var(mut ref arena, mut ref table, "x");
+    let x_sq: i64 = sym_pow(mut ref arena, x, sym_num(mut ref arena, 2));
+    let f: i64 = sym_mul(mut ref arena, sym_num(mut ref arena, 3), x_sq);
+
+    let r: SymIntegrateResult = sym_integrate(mut ref arena, f, vid);
+    assert r.ok;
+    let d: i64 = sym_diff(mut ref arena, r.idx, vid);
+
+    assert check_ftc(ref arena, f, ref arena, d, 2);
+    assert check_ftc(ref arena, f, ref arena, d, 0 - 3);
+    return 0;
+}
+
+#[test]
+fn test_integrate_div_by_constant() -> i64 {
+    // ∫x^2 / 4 dx  -- f/const rule
+    let arena: Vec<ExprNode> = sym_arena_new();
+    let table: SymbolTable = symtab_new();
+    let vid: i64 = symtab_intern(mut ref table, "x");
+    let x: i64 = sym_var(mut ref arena, mut ref table, "x");
+    let x_sq: i64 = sym_pow(mut ref arena, x, sym_num(mut ref arena, 2));
+    let f: i64 = sym_div(mut ref arena, x_sq, sym_num(mut ref arena, 4));
+
+    let r: SymIntegrateResult = sym_integrate(mut ref arena, f, vid);
+    assert r.ok;
+    let d: i64 = sym_diff(mut ref arena, r.idx, vid);
+
+    assert check_ftc(ref arena, f, ref arena, d, 2);
+    assert check_ftc(ref arena, f, ref arena, d, 5);
+    return 0;
+}
+
+#[test]
+fn test_integrate_linear_substitution() -> i64 {
+    // ∫(2x+1)^2 dx  -- u-substitution via _sym_linear_shape
+    let arena: Vec<ExprNode> = sym_arena_new();
+    let table: SymbolTable = symtab_new();
+    let vid: i64 = symtab_intern(mut ref table, "x");
+    let x: i64 = sym_var(mut ref arena, mut ref table, "x");
+    let two_x: i64 = sym_mul(mut ref arena, sym_num(mut ref arena, 2), x);
+    let base: i64 = sym_add(mut ref arena, two_x, sym_num(mut ref arena, 1));
+    let f: i64 = sym_pow(mut ref arena, base, sym_num(mut ref arena, 2));
+
+    let r: SymIntegrateResult = sym_integrate(mut ref arena, f, vid);
+    assert r.ok;
+    let d: i64 = sym_diff(mut ref arena, r.idx, vid);
+
+    assert check_ftc(ref arena, f, ref arena, d, 1);
+    assert check_ftc(ref arena, f, ref arena, d, 0 - 2);
+    return 0;
+}
+
+// ── Unrecognized shapes: must return ok=false, never a wrong guess ──────
+
+#[test]
+fn test_integrate_product_of_two_var_factors_returns_not_ok() -> i64 {
+    // x*x -- both sides depend on var_id, no product rule for integration
+    let arena: Vec<ExprNode> = sym_arena_new();
+    let table: SymbolTable = symtab_new();
+    let vid: i64 = symtab_intern(mut ref table, "x");
+    let x: i64 = sym_var(mut ref arena, mut ref table, "x");
+    let f: i64 = sym_mul(mut ref arena, x, x);
+
+    let r: SymIntegrateResult = sym_integrate(mut ref arena, f, vid);
+    assert r.ok == false;
+    return 0;
+}
+
+#[test]
+fn test_integrate_negative_exponent_returns_not_ok() -> i64 {
+    // x^(-1) -- 1/x's antiderivative (ln|x|) is out of scope
+    let arena: Vec<ExprNode> = sym_arena_new();
+    let table: SymbolTable = symtab_new();
+    let vid: i64 = symtab_intern(mut ref table, "x");
+    let x: i64 = sym_var(mut ref arena, mut ref table, "x");
+    let f: i64 = sym_pow(mut ref arena, x, sym_num(mut ref arena, 0 - 1));
+
+    let r: SymIntegrateResult = sym_integrate(mut ref arena, f, vid);
+    assert r.ok == false;
+    return 0;
+}
+
+#[test]
+fn test_integrate_non_literal_exponent_returns_not_ok() -> i64 {
+    // x^x -- exponent isn't a literal Num, no rule matches
+    let arena: Vec<ExprNode> = sym_arena_new();
+    let table: SymbolTable = symtab_new();
+    let vid: i64 = symtab_intern(mut ref table, "x");
+    let x: i64 = sym_var(mut ref arena, mut ref table, "x");
+    let f: i64 = sym_pow(mut ref arena, x, x);
+
+    let r: SymIntegrateResult = sym_integrate(mut ref arena, f, vid);
+    assert r.ok == false;
+    return 0;
+}
+
+#[test]
+fn test_integrate_nonlinear_pow_base_returns_not_ok() -> i64 {
+    // (x^2)^2 -- Pow base is itself a Pow, not the bare-var or recognized
+    // linear shape _sym_linear_shape accepts
+    let arena: Vec<ExprNode> = sym_arena_new();
+    let table: SymbolTable = symtab_new();
+    let vid: i64 = symtab_intern(mut ref table, "x");
+    let x: i64 = sym_var(mut ref arena, mut ref table, "x");
+    let x_sq: i64 = sym_pow(mut ref arena, x, sym_num(mut ref arena, 2));
+    let f: i64 = sym_pow(mut ref arena, x_sq, sym_num(mut ref arena, 2));
+
+    let r: SymIntegrateResult = sym_integrate(mut ref arena, f, vid);
+    assert r.ok == false;
+    return 0;
+}
+
+fn main() -> i64 { return 0; }

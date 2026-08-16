@@ -1,0 +1,67 @@
+// A quick tour of vani-symbolic v0.4.0's polynomial integration: the
+// power/sum/constant-multiple rules, a linear u-substitution case, and
+// one unrecognized shape returning an explicit "not ok" instead of a
+// wrong guess.
+// Run with:  vanic run examples/integrate_demo.vani
+//    and:    vanic run --backend=c examples/integrate_demo.vani
+
+use "../src/lib.vani";
+
+fn print_result(r: SymIntegrateResult, arena: ref Vec<ExprNode>, table: ref SymbolTable) -> i64 {
+    if r.ok == false {
+        print "  (not recognized -- out of this phase's scope)";
+        return 0;
+    }
+    print sym_to_str(arena, table, r.idx);
+    return 0;
+}
+
+fn main() -> i64 {
+    // ---- ∫x^2 + 3x - 5 dx ----
+    let a1: Vec<ExprNode> = sym_arena_new();
+    let t1: SymbolTable = symtab_new();
+    let vid1: i64 = symtab_intern(mut ref t1, "x");
+    let x1: i64 = sym_var(mut ref a1, mut ref t1, "x");
+    let x1_sq: i64 = sym_pow(mut ref a1, x1, sym_num(mut ref a1, 2));
+    let three_x1: i64 = sym_mul(mut ref a1, sym_num(mut ref a1, 3), x1);
+    let step1: i64 = sym_add(mut ref a1, x1_sq, three_x1);
+    let f1: i64 = sym_sub(mut ref a1, step1, sym_num(mut ref a1, 5));
+    print "∫ x^2 + 3x - 5 dx  ->";
+    let r1: SymIntegrateResult = sym_integrate(mut ref a1, f1, vid1);
+    let _p1: i64 = print_result(r1, ref a1, ref t1);
+
+    // ---- ∫(2x+1)^2 dx  (linear u-substitution) ----
+    let a2: Vec<ExprNode> = sym_arena_new();
+    let t2: SymbolTable = symtab_new();
+    let vid2: i64 = symtab_intern(mut ref t2, "x");
+    let x2: i64 = sym_var(mut ref a2, mut ref t2, "x");
+    let two_x2: i64 = sym_mul(mut ref a2, sym_num(mut ref a2, 2), x2);
+    let base2: i64 = sym_add(mut ref a2, two_x2, sym_num(mut ref a2, 1));
+    let f2: i64 = sym_pow(mut ref a2, base2, sym_num(mut ref a2, 2));
+    print "∫ (2x+1)^2 dx  ->";
+    let r2: SymIntegrateResult = sym_integrate(mut ref a2, f2, vid2);
+    let _p2: i64 = print_result(r2, ref a2, ref t2);
+
+    // ---- ∫x^2 / 4 dx ----
+    let a3: Vec<ExprNode> = sym_arena_new();
+    let t3: SymbolTable = symtab_new();
+    let vid3: i64 = symtab_intern(mut ref t3, "x");
+    let x3: i64 = sym_var(mut ref a3, mut ref t3, "x");
+    let x3_sq: i64 = sym_pow(mut ref a3, x3, sym_num(mut ref a3, 2));
+    let f3: i64 = sym_div(mut ref a3, x3_sq, sym_num(mut ref a3, 4));
+    print "∫ x^2 / 4 dx  ->";
+    let r3: SymIntegrateResult = sym_integrate(mut ref a3, f3, vid3);
+    let _p3: i64 = print_result(r3, ref a3, ref t3);
+
+    // ---- ∫x*x dx  (unrecognized: product of two var-dependent factors) ----
+    let a4: Vec<ExprNode> = sym_arena_new();
+    let t4: SymbolTable = symtab_new();
+    let vid4: i64 = symtab_intern(mut ref t4, "x");
+    let x4: i64 = sym_var(mut ref a4, mut ref t4, "x");
+    let f4: i64 = sym_mul(mut ref a4, x4, x4);
+    print "∫ x*x dx  ->";
+    let r4: SymIntegrateResult = sym_integrate(mut ref a4, f4, vid4);
+    let _p4: i64 = print_result(r4, ref a4, ref t4);
+
+    return 0;
+}

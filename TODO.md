@@ -305,6 +305,118 @@ work is already done in vani-algebra."
 
 ---
 
+## v0.4.0 — Implemented ✓ (published as package version 0.6.0)
+
+Landed after v0.5.0 despite the roadmap phase number, per the roadmap's
+own recommended reordering ("v0.5.0 is cheap, can jump ahead of v0.4.0
+if integration stalls"). Flagged High risk in the roadmap; confirmed
+why during implementation (see scope correction below), then landed
+clean in one pass -- every rule compiled and passed its FTC check on
+the first run.
+
+Published as package version `0.6.0`, not `0.4.0`: `vani.toml` was
+already at `0.5.0` from the prior phase, and vāṇी requires a single,
+monotonically-resolvable version per package name in the dependency
+graph, so a literal `0.4.0` release would be unresolvable/unreachable
+via any `^0.5.0`-style dependent. The roadmap's phase numbers are a
+planning label, not a release-version promise -- same distinction the
+v0.5.0 section above already draws.
+
+### Scope correction, found during implementation
+
+The roadmap's original text mentions "elementary exp/ln/sin/cos
+antiderivatives", but `ExprNode`'s kind set has never grown past the 8
+kinds v0.1.0 shipped with. Adding transcendental-function kinds would
+mean extending EVERY existing walker (`sym_eval`, `sym_diff`,
+`sym_simplify`, `sym_to_str`, `sym_eq_structural`) -- a much larger
+undertaking than "add integration" alone, and not needed to deliver a
+genuinely useful integration layer. Same kind of correction v0.3.0
+(`vani-tensor` never actually needed) and v0.5.0 (`vani-algebra` itself
+needed a version bump) already made explicit in this file. **This phase
+covers polynomial integration only** -- power rule, linearity, the
+constant-multiple/constant-divisor rules, and a small set of recognized
+linear `u`-substitution shapes (`(ax+b)^n`).
+
+### Integration (1 public function + 3 private helpers)
+- [x] `sym_integrate(arena, root, var_id)` -- one rule per recognized
+      shape, explicit `ok=false` (via `SymIntegrateResult { ok, idx }`)
+      for anything unrecognized -- never a guess, same discipline
+      `sym_poly_coeffs_le2` (v0.5.0) already established. Handles: `Num`
+      (constant rule), bare `Var` (matching var -> `x^2/2`, other var
+      treated as a constant), `Add`/`Sub` (linearity, recursive on both
+      sides), `Neg` (recursive), `Mul` where exactly one side doesn't
+      contain `var_id` (constant-multiple rule, via `_sym_contains_var`),
+      `Div` with a `var_id`-free denominator, and `Pow` with a literal
+      integer exponent `!= -1` over either a bare matching `Var` (power
+      rule), a `var_id`-free base (folds to a constant), or a recognized
+      linear base (`_sym_linear_shape`, u-substitution: `(ax+b)^n ->
+      (ax+b)^(n+1) / (a*(n+1))`). Returns `ok=false` for: `n == -1`
+      (`1/x -> ln|x|` is out of scope), a non-literal exponent, a
+      product/quotient of two `var_id`-dependent factors, or a
+      non-linear `Pow` base -- integration by parts, partial fractions,
+      and the Risch algorithm are all explicitly out of scope, matching
+      the roadmap's own "not a general algorithm" framing.
+- [x] `_sym_contains_var(arena, idx, var_id)` -- recursive containment
+      check the constant-multiple/constant-divisor/constant-Pow-base
+      rules all need. Takes `mut ref` (not `ref`): the checker doesn't
+      reborrow a `mut ref` binding as `ref` at a call site (same
+      limitation `sym_add`'s own header comment already documents, hit
+      again in `vani-ml`'s v0.3.0 work) -- since every call site here is
+      from inside `sym_integrate`'s `mut ref arena`, the helper's own
+      signature was changed to `mut ref` rather than fighting the
+      reborrow rule at each call site.
+- [x] `_sym_linear_shape(arena, idx, var_id)` -- recognizes a SMALL,
+      deliberately narrow set of `a*x + b` shapes as actually built by
+      this file's own constructors (bare `Var`, `Mul(Num,Var)`, one
+      `Add`/`Sub` of a `Num` on top, and the commuted `Add(Num,linear)`
+      form) via `SymLinearShape { ok, a, b }`. NOT a reuse of
+      `sym_poly_coeffs_le2` (v0.5.0's general degree<=2 extractor) --
+      that function takes `ref`, hitting the exact same `mut
+      ref`-can't-reborrow-as-`ref` limitation `_sym_contains_var` above
+      also hit; rather than fight it twice the same way, this is a
+      dedicated `mut ref`-native recursive helper instead.
+- [x] `_sym_var_ref(arena, var_id)` -- constructs a fresh `Var` node
+      directly from an already-known `var_id`, bypassing
+      `SymbolTable`/`symtab_intern` (which exists to turn a NAME into a
+      `var_id` -- `sym_integrate` already has the `var_id` it's
+      integrating with respect to, so that machinery doesn't apply
+      here). Same low-level `ExprNode` push `sym_var` does internally,
+      minus the intern step.
+
+### Tests
+- [x] `tests/test_integrate.vani` (12 `#[test]`s) -- one per recognized
+      rule (constant, bare var, power rule, sum/difference combo, neg,
+      constant-multiple, constant-divisor, linear u-substitution) plus
+      four unrecognized-shape cases (`x*x`, `x^(-1)`, `x^x`, `(x^2)^2`)
+      each confirming the explicit `ok=false` signal. Every recognized
+      case is validated via the fundamental theorem of calculus:
+      `sym_diff(sym_integrate(f))` evaluated via `sym_eval` at several
+      integer sample points must equal `f` evaluated at the same
+      points -- evaluation-based, not structural equality, matching
+      v0.3.0's own validation approach (`sym_diff`'s raw output isn't
+      simplified, so exact structural equality to a "canonical" form
+      would be too strict a bar). Confirmed by hand before writing the
+      tests: since every rule here is power-rule-based, the
+      quotient-rule derivative's internal `Div` nodes always cancel to
+      an exact integer regardless of which integer sample point is
+      used (`sym_eval` is entirely `i64` arithmetic, no floats in this
+      arena) -- so no special sample-point selection was needed.
+- [x] `examples/integrate_demo.vani` -- four cases (a polynomial sum,
+      linear u-substitution, constant-divisor, and one unrecognized
+      shape printing the explicit "not ok" message instead of a wrong
+      guess), verified on both backends with identical output.
+
+### Safety annotations
+- [x] `vanic audit-safety` reports full clean coverage. `sym_integrate`,
+      `_sym_contains_var`, `_sym_linear_shape` are exempt from both
+      `#[bounded_stack]` and `#[wcet]` (recursion depth is the tree
+      depth, a runtime value). `_sym_var_ref` (fixed-shape) got a real
+      `#[bounded_stack(bytes=56)]`/`#[wcet(cycles=36)]`.
+- [x] Full `vanic check` (real SMT verification, no `VANIC_NO_VERIFY`)
+      passes clean.
+
+---
+
 ## Future
 
 Phased breakdown (versions proposed, not committed) tracked in
@@ -312,10 +424,6 @@ Phased breakdown (versions proposed, not committed) tracked in
 `vani-symbolic` scoping section. Each phase needs its own
 confirm-before-starting, same discipline as this package itself.
 
-- **v0.4.0: Basic symbolic integration** -- a fixed pattern table
-  (term-by-term polynomial power rule, elementary antiderivatives, a
-  few recognized `u`-substitution shapes), not a general algorithm (no
-  Risch). Not started.
 - **v0.6.0+: Polynomial factorization** -- folds in what would have
   been a separate `vani-polyalgebra` repo (rational-root theorem +
   synthetic division). Gröbner bases stay out of scope unless a real
