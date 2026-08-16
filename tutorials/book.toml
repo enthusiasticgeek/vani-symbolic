@@ -1,0 +1,21 @@
+# mdBook configuration for the symbolic API-reference tutorial.
+# Auto-scaffolded once by tools/gen_api_tutorial.py; edit freely --
+# unlike src/*.md, this file is NOT regenerated on subsequent runs.
+[book]
+title = "symbolic — API Reference"
+authors = ["vāṇी contributors"]
+description = "Auto-generated function-by-function API reference for the symbolic vāṇी package."
+language = "en"
+src = "src"
+
+[output.html]
+default-theme = "rust"
+preferred-dark-theme = "navy"
+git-repository-url = "https://github.com/enthusiasticgeek/vani-symbolic"
+edit-url-template = "https://github.com/enthusiasticgeek/vani-symbolic/edit/main/tutorials/{path}"
+# LaTeX math rendering via MathJax, for packages whose comments use
+# math notation (e.g. \\(A x = b\\) or \\[ ... \\] blocks).
+mathjax-support = true
+
+[output.html.search]
+enable = true
