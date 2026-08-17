@@ -1,6 +1,6 @@
 // vani-symbolic  v0.1.0 — expression construction, evaluation, printing
 //
-// IMPORTANT — do NOT reimplement vāṇी compiler builtins.
+// IMPORTANT — do NOT reimplement vāṇī compiler builtins.
 // Already available as builtins (call directly, never redeclare here):
 //   push len vec i64_to_str clone_at
 //
@@ -10,7 +10,7 @@
 //
 // ENCODING: flat arena, not a recursive enum. The obvious design --
 // `enum Expr { Add(Box<Expr>, Box<Expr>), ... }` -- does NOT compile in
-// vāṇी today: enum variants admit only a single payload field in v1 (a
+// vāṇī today: enum variants admit only a single payload field in v1 (a
 // two-child variant is rejected outright), and box()'s admitted payload
 // types exclude anything that transitively contains the type being
 // defined (so Box<Expr> inside Expr's own definition is also rejected).
@@ -775,7 +775,7 @@ fn _sym_simplify_sum(src: ref Vec<ExprNode>, root: i64, dst: mut ref Vec<ExprNod
 //     directly since d(u^0)/dx = d(1)/dx = 0.
 //
 // Every local below has a rule-specific name suffix (_add/_sub/_neg/
-// _mul/_div/_pow), even across non-overlapping if-branches -- vāṇी's LLVM
+// _mul/_div/_pow), even across non-overlapping if-branches -- vāṇī's LLVM
 // backend has a known codegen bug where reusing one local name across
 // sibling branches of the same function can crash with "multiple
 // definition of local value" even though the branches never execute

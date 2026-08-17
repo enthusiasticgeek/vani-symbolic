@@ -186,7 +186,7 @@ associativity flattening).
       readable" note.
 - [x] Every local variable given a rule-specific name suffix
       (`_add`/`_sub`/`_neg`/`_mul`/`_div`/`_pow`), even across
-      non-overlapping if-branches, to sidestep vāṇी's known LLVM
+      non-overlapping if-branches, to sidestep vāṇī's known LLVM
       codegen bug where reusing one local name across sibling branches
       of the same function can crash with "multiple definition of local
       value" even though the branches never execute together.
@@ -275,7 +275,7 @@ work is already done in vani-algebra."
       production dependency this time (unlike `calculus`, which is
       tests/examples-only). Hit a real resolver conflict doing this:
       `vani-algebra`'s own vendored `calculus` was stale (`^0.2.0`
-      against this package's `^0.3.1`), and vāṇी requires a single
+      against this package's `^0.3.1`), and vāṇī requires a single
       resolved version per package name across the whole graph. Fixed by
       bumping `vani-algebra` itself to `v0.1.4` (a pure dependency-version
       bump, its production code's `calculus::` calls are all stable,
@@ -319,7 +319,7 @@ clean in one pass -- every rule compiled and passed its FTC check on
 the first run.
 
 Published as package version `0.6.0`, not `0.4.0`: `vani.toml` was
-already at `0.5.0` from the prior phase, and vāṇी requires a single,
+already at `0.5.0` from the prior phase, and vāṇī requires a single,
 monotonically-resolvable version per package name in the dependency
 graph, so a literal `0.4.0` release would be unresolvable/unreachable
 via any `^0.5.0`-style dependent. The roadmap's phase numbers are a

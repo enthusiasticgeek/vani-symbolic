@@ -1,6 +1,6 @@
 # vani-symbolic
 
-Symbolic-math (CAS) foundation for the [vāṇी compiler](https://github.com/enthusiasticgeek/vani-compiler).
+Symbolic-math (CAS) foundation for the [vāṇī compiler](https://github.com/enthusiasticgeek/vani-compiler).
 Implements the full planned symbolic tier in
 [kosh-index/ROADMAP.md](https://github.com/enthusiasticgeek/kosh-index/blob/main/ROADMAP.md)
 -- expression construction, numeric evaluation, precedence-aware
@@ -22,7 +22,7 @@ Closer in shape to the Copy-struct libraries
 but a genuinely new pattern in this ecosystem: no existing package uses
 a kind-tag-discriminated arena. Chosen because a recursive
 `enum Expr { Add(Box<Expr>, Box<Expr>), ... }` does not compile in
-vāṇी today -- see "Encoding" below.
+vāṇī today -- see "Encoding" below.
 
 **API reference / tutorial:** <https://enthusiasticgeek.github.io/vani-symbolic/>
 
@@ -68,7 +68,7 @@ by [vani-tensor](https://github.com/enthusiasticgeek/vani-tensor)'s
 shape encoding and [vani-sparse](https://github.com/enthusiasticgeek/vani-sparse)'s
 COO/CSR, applied to a tree instead of a matrix.
 
-**Why not a recursive enum?** vāṇी's enum variants admit only a single
+**Why not a recursive enum?** vāṇī's enum variants admit only a single
 payload field in v1, and `box()` rejects a type that transitively
 contains itself -- both confirmed by direct compiler test while scoping
 this package. A naive `Add(Box<Expr>, Box<Expr>)` variant hits both
