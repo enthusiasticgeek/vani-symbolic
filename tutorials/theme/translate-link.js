@@ -31,7 +31,22 @@
   // visitor's own browser locale (the best available signal for
   // "what language does this reader actually want") rather than
   // asking or hardcoding one.
+  var SOURCE_LANG = "en"; // every page on this site is authored in English
   var targetLang = ((navigator.language || navigator.userLanguage || "en").split("-")[0] || "en").toLowerCase();
+  // Found while re-verifying the fix below: translate.goog returns a
+  // hard 400 (not a harmless same-language no-op) whenever tl equals
+  // sl -- confirmed by curling sl=en&tl=en (400) against sl=en&tl=de
+  // (200) and sl=auto&tl=en (200), isolating it to the tl==sl case
+  // specifically. An English-locale visitor (the majority case) would
+  // otherwise always hit this error, independent of either fix below
+  // -- likely the actual root cause of "cannot translate" on a phone
+  // whose Chrome/OS language is English. There's nothing meaningful to
+  // translate into the page's own source language anyway, so skip
+  // rendering the button entirely in that case rather than link to a
+  // request Google will reject.
+  if (targetLang === SOURCE_LANG) {
+    return;
+  }
   // Reported again on Chrome for Android specifically: tapping the
   // (now correctly tl-targeted) translate.google.com/translate link
   // produced Chrome's own native "Couldn't translate this page" error
@@ -59,7 +74,9 @@
     host +
     ".translate.goog" +
     window.location.pathname +
-    "?_x_tr_sl=en&_x_tr_tl=" +
+    "?_x_tr_sl=" +
+    SOURCE_LANG +
+    "&_x_tr_tl=" +
     encodeURIComponent(targetLang) +
     "&_x_tr_hl=" +
     encodeURIComponent(targetLang) +
