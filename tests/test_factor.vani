@@ -144,6 +144,45 @@ fn test_factor_partial_irrational_remainder() -> i64 {
 }
 
 #[test]
+fn test_sym_poly_coeffs_le2_matches_manual() -> i64 {
+    // 3x^2 + 2x - 5, built symbolically. sym_poly_coeffs_le2 predates the
+    // arbitrary-degree sym_poly_coeffs above (v0.5.0 vs v0.6.0+) and had
+    // no direct call site of its own left after the generalization.
+    let arena: Vec<ExprNode> = sym_arena_new();
+    let table: SymbolTable = symtab_new();
+    let vid: i64 = symtab_intern(mut ref table, "x");
+    let x: i64 = sym_var(mut ref arena, mut ref table, "x");
+    let x_sq: i64 = sym_pow(mut ref arena, x, sym_num(mut ref arena, 2));
+    let three_x_sq: i64 = sym_mul(mut ref arena, sym_num(mut ref arena, 3), x_sq);
+    let two_x: i64 = sym_mul(mut ref arena, sym_num(mut ref arena, 2), x);
+    let step1: i64 = sym_add(mut ref arena, three_x_sq, two_x);
+    let expr: i64 = sym_sub(mut ref arena, step1, sym_num(mut ref arena, 5));
+
+    let extracted: SymPolyCoeffs = sym_poly_coeffs_le2(ref arena, expr, vid);
+    assert extracted.ok;
+    assert abs(extracted.c0 - (0.0 - 5.0)) < 1.0e-12;
+    assert abs(extracted.c1 - 2.0) < 1.0e-12;
+    assert abs(extracted.c2 - 3.0) < 1.0e-12;
+    return 0;
+}
+
+#[test]
+fn test_sym_poly_coeffs_le2_unrecognized_shape_returns_not_ok() -> i64 {
+    // x*x -- Mul(Var,Var), not one of the recognized term shapes (the
+    // Pow(Var,Num(2)) shape via _sym_is_var_squared is, but a literal
+    // var*var product isn't).
+    let arena: Vec<ExprNode> = sym_arena_new();
+    let table: SymbolTable = symtab_new();
+    let vid: i64 = symtab_intern(mut ref table, "x");
+    let x: i64 = sym_var(mut ref arena, mut ref table, "x");
+    let expr: i64 = sym_mul(mut ref arena, x, x);
+
+    let extracted: SymPolyCoeffs = sym_poly_coeffs_le2(ref arena, expr, vid);
+    assert extracted.ok == false;
+    return 0;
+}
+
+#[test]
 fn test_sym_poly_coeffs_matches_manual() -> i64 {
     // x^3 - 6x^2 + 11x - 6, built symbolically
     let arena: Vec<ExprNode> = sym_arena_new();

@@ -28,6 +28,14 @@ fn main() -> i64 {
     let idx_x: i64 = sym_var(mut ref arena, mut ref table, "x");
     let idx_y: i64 = sym_var(mut ref arena, mut ref table, "y");
     let idx_x2: i64 = sym_var(mut ref arena, mut ref table, "x");
+
+    // symtab_name_at: owned clone of the display name for a var_id. Had
+    // no direct call site of its own before this (var_id 0 -> "x",
+    // var_id 1 -> "y", matching intern order above).
+    let name0: OwnedStr = symtab_name_at(ref table, 0);
+    assert name0 == "x";
+    let name1: OwnedStr = symtab_name_at(ref table, 1);
+    assert name1 == "y";
     assert len(ref table.names) == 2;
     assert arena[idx_x].kind == 1;
     assert arena[idx_x].value == arena[idx_x2].value;
