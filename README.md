@@ -24,6 +24,8 @@ a kind-tag-discriminated arena. Chosen because a recursive
 `enum Expr { Add(Box<Expr>, Box<Expr>), ... }` does not compile in
 vāṇी today -- see "Encoding" below.
 
+**API reference / tutorial:** <https://enthusiasticgeek.github.io/vani-symbolic/>
+
 ## Add to your project
 
 ```toml
