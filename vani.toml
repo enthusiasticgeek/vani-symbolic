@@ -1,6 +1,6 @@
 [package]
 name    = "symbolic"
-version = "0.7.0"
+version = "0.7.1"
 entry   = "src/lib.vani"
 authors = "enthusiasticgeek"
 license = "MIT"
