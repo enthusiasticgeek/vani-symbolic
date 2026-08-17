@@ -32,12 +32,38 @@
   // "what language does this reader actually want") rather than
   // asking or hardcoding one.
   var targetLang = ((navigator.language || navigator.userLanguage || "en").split("-")[0] || "en").toLowerCase();
+  // Reported again on Chrome for Android specifically: tapping the
+  // (now correctly tl-targeted) translate.google.com/translate link
+  // produced Chrome's own native "Couldn't translate this page" error
+  // instead of navigating anywhere -- the mobile Chrome app appears to
+  // specially intercept links to that exact host+path and hand them to
+  // its built-in translate-infobar flow rather than treating them as
+  // an ordinary external URL, and that native flow fails independently
+  // of whether the link itself is correct (confirmed the link's own
+  // request chain still returns a real 200 via curl with a mobile
+  // Chrome User-Agent). Sidestepped by building the actual
+  // <host>.translate.goog proxy URL directly instead of going through
+  // translate.google.com/translate's redirect -- from Chrome's
+  // perspective this is just an ordinary link to an ordinary external
+  // domain, no special interception applies. Escapes a literal "-" in
+  // the hostname first (as "--") before substituting "." with "-",
+  // matching Google's own reversible host-encoding scheme (not
+  // exercised by this site's own "enthusiasticgeek.github.io" host,
+  // which has no hyphens, but correct in general).
+  var host = window.location.hostname
+    .replace(/-/g, "--")
+    .replace(/\./g, "-");
   var link = document.createElement("a");
   link.href =
-    "https://translate.google.com/translate?sl=en&tl=" +
+    "https://" +
+    host +
+    ".translate.goog" +
+    window.location.pathname +
+    "?_x_tr_sl=en&_x_tr_tl=" +
     encodeURIComponent(targetLang) +
-    "&u=" +
-    encodeURIComponent(window.location.href);
+    "&_x_tr_hl=" +
+    encodeURIComponent(targetLang) +
+    "&_x_tr_pto=wapp";
   link.title = "Translate this page";
   link.setAttribute("aria-label", "Translate this page");
   link.target = "_blank";
