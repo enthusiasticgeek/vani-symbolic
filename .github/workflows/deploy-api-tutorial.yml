@@ -23,6 +23,8 @@ on:
       - "vani.toml"
       - "tools/gen_api_tutorial.py"
       - "tools/tutorial_extras.json"
+      - "tutorials/theme/**"
+      - "tutorials/book.toml"
       - ".github/workflows/deploy-api-tutorial.yml"
   workflow_dispatch:
 
