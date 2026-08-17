@@ -6,7 +6,16 @@
 // Reuses the existing `.fa-svg` class so it inherits the same padding/
 // sizing as the built-in print/git-repository/git-edit icon buttons.
 (function () {
-  var rightButtons = document.querySelector("#mdbook-menu-bar .right-buttons");
+  // mdBook renamed #menu-bar to #mdbook-menu-bar somewhere around
+  // 0.5.x (this project's CI pins an older mdBook than the version
+  // used for local dev builds, so the deployed HTML used the old,
+  // unprefixed ID -- the button silently never appeared on the real
+  // site, confirmed by diffing local-build vs deployed-site DOM).
+  // Match both so this keeps working across an mdBook version bump
+  // either way.
+  var rightButtons = document.querySelector(
+    "#mdbook-menu-bar .right-buttons, #menu-bar .right-buttons"
+  );
   if (!rightButtons) {
     return;
   }
