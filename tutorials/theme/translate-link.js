@@ -19,9 +19,24 @@
   if (!rightButtons) {
     return;
   }
+  // Reported directly: the button appeared but "cannot translate" --
+  // the link never passed a `tl` (target language), so Google's own
+  // redirect from translate.google.com/translate to the real
+  // <host>.translate.goog proxy defaulted `tl` to match `sl` (en->en,
+  // a same-language no-op that renders the page completely unchanged
+  // even though the request itself succeeds). Confirmed by curling
+  // the redirect chain with and without an explicit `tl`: identical
+  // request otherwise, only the target-language default differs.
+  // Fixed by always passing a real target language, read from the
+  // visitor's own browser locale (the best available signal for
+  // "what language does this reader actually want") rather than
+  // asking or hardcoding one.
+  var targetLang = ((navigator.language || navigator.userLanguage || "en").split("-")[0] || "en").toLowerCase();
   var link = document.createElement("a");
   link.href =
-    "https://translate.google.com/translate?sl=en&u=" +
+    "https://translate.google.com/translate?sl=en&tl=" +
+    encodeURIComponent(targetLang) +
+    "&u=" +
     encodeURIComponent(window.location.href);
   link.title = "Translate this page";
   link.setAttribute("aria-label", "Translate this page");
