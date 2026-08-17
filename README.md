@@ -1,12 +1,17 @@
 # vani-symbolic
 
 Symbolic-math (CAS) foundation for the [vāṇी compiler](https://github.com/enthusiasticgeek/vani-compiler).
-Phases 1-3 of the planned symbolic tier in
+Implements the full planned symbolic tier in
 [kosh-index/ROADMAP.md](https://github.com/enthusiasticgeek/kosh-index/blob/main/ROADMAP.md)
 -- expression construction, numeric evaluation, precedence-aware
 printing, simplification (constant folding, identities, like-term
-collection), and symbolic differentiation. No integration or equation
-solving yet; those are later phases.
+collection), symbolic differentiation, degree<=2 equation solving,
+polynomial integration (power rule, linearity, linear
+u-substitution), and rational-root factorization (folded in from what
+would have been a separate `vani-polyalgebra` repo, per the roadmap's
+own decision). Gröbner bases, factorization over anything but the
+rationals, and a general polynomial normal form stay out of scope --
+see "What this library does NOT provide" below.
 
 `ExprNode` is a plain `Copy` struct (four `i64` fields, no heap-owning
 field) living in a flat `Vec<ExprNode>` arena, unlike the owned-`Vec`
@@ -24,7 +29,7 @@ vāṇी today -- see "Encoding" below.
 ```toml
 # vani.toml
 [deps]
-symbolic = { registry = "kosh", version = "^0.1" }
+symbolic = { registry = "kosh", version = "^0.7" }
 ```
 
 ```sh
@@ -32,7 +37,7 @@ vanic add symbolic
 vanic build
 ```
 
-## What's included (v0.1.0-v0.3.0 — construction through differentiation; see TODO.md)
+## What's included (v0.1.0-v0.7.0 — construction through rational-root factorization; see TODO.md)
 
 | Module | Functions |
 |---|---|
@@ -43,6 +48,9 @@ vanic build
 | Equality | `sym_eq_structural` (same-shape only, NOT commutative -- `1+2` and `2+1` are not equal here) |
 | Simplification | `sym_simplify` (constant folding, identities, and like-term collection for flat linear combinations of monomials -- see "Simplification scope" below; NOT general polynomial normal form) |
 | Differentiation | `sym_diff` (sum/difference/negation/product/quotient/power+chain rules -- see "Differentiation" below) |
+| Equation solving, degree<=2 | `sym_poly_coeffs_le2`, `sym_solve_poly_le2` (delegates to `vani-algebra`'s real-root solver), `sym_solve_equation_le2` (two-sided `lhs = rhs` form, works even across different arenas) |
+| Integration | `sym_integrate` -- power rule, linearity (`Add`/`Sub`/`Neg`), constant-multiple/-divisor rules, and recognized linear `u`-substitution shapes (`(ax+b)^n`); explicit `ok=false` for anything unrecognized (`1/x`, non-literal exponents, a product of two var-dependent factors, ...), never a guess |
+| Rational-root factorization | `poly_rational_roots` (exact, via the rational-root theorem + exact-integer verification), `poly_factor_rational` (synthetic division via `vani-algebra`'s deflation step, roots with multiplicity), `sym_poly_coeffs` (arbitrary-degree generalization of `sym_poly_coeffs_le2`), `sym_factor_rational` (symbolic-tree entry point) |
 
 ## Encoding
 
@@ -158,15 +166,23 @@ compared against the numeric central-difference derivative at the same
 point. `vani-calculus` is vendored for this test/example validation
 only -- production `sym_diff` makes zero calls into it.
 
-## What this library does NOT provide (yet)
+## What this library does NOT provide
 
-- **Integration, equation solving.** Later phases of the symbolic tier
-  -- see kosh-index/ROADMAP.md's `vani-symbolic` scoping breakdown for
-  the full phased plan.
+- **Transcendental functions** (`exp`/`ln`/`sin`/`cos`, ...). `ExprNode`'s
+  kind set has never grown past the 8 kinds v0.1.0 shipped with --
+  adding these would mean extending every existing walker (`sym_eval`,
+  `sym_diff`, `sym_simplify`, `sym_to_str`, `sym_eq_structural`), a much
+  larger undertaking than any single phase so far. `sym_integrate`
+  covers polynomial integration only for this reason.
+- **Integration/factorization beyond what's listed above.** `1/x ->
+  ln|x|`, integration by parts, partial fractions, the Risch algorithm,
+  Gröbner bases, and factorization over anything but the rationals are
+  all explicitly out of scope, matching the roadmap's own "not a
+  general algorithm" framing.
 - **General polynomial normal form.** See "Simplification scope" above.
-- **`BigInt`-backed numbers.** `Num.value` is a plain `i64` in v0.1.0,
-  matching this ecosystem's narrow-then-widen precedent. The design
-  leaves room for a future `Vec<BigInt>` side table (parallel to
+- **`BigInt`-backed numbers.** `Num.value` is a plain `i64`, matching
+  this ecosystem's narrow-then-widen precedent. The design leaves room
+  for a future `Vec<BigInt>` side table (parallel to
   `SymbolTable.names`) reinterpreting `Num.value` as an index rather
   than a literal, with no `ExprNode` shape change needed -- not built
   now (YAGNI until a real overflow problem shows up).
